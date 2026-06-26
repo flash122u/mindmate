@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# 运行时
+logs/
+memory/memory.db
+memory/sessions/

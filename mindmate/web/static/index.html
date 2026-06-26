@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MindMate — 小暖</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
+
+  /* 顶栏 */
+  header { background: #fff; padding: 12px 20px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 12px; }
+  header .avatar { width: 36px; height: 36px; border-radius: 50%; background: #e8f5e9; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+  header .info h1 { font-size: 15px; color: #333; }
+  header .info .status { font-size: 12px; color: #999; }
+  header .info .status.online { color: #4caf50; }
+
+  /* 聊天区 */
+  #chat { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 70%; padding: 10px 14px; border-radius: 16px; font-size: 14px; line-height: 1.5; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: #07c160; color: #fff; border-bottom-right-radius: 4px; }
+  .msg.assistant { align-self: flex-start; background: #fff; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .msg.system { align-self: center; background: #f0f0f0; color: #999; font-size: 12px; padding: 6px 12px; border-radius: 10px; }
+
+  /* 输入区 */
+  #input-bar { background: #fff; padding: 12px 20px; border-top: 1px solid #e0e0e0; display: flex; gap: 10px; }
+  #input-bar input { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 20px; outline: none; font-size: 14px; }
+  #input-bar input:focus { border-color: #07c160; }
+  #input-bar button { padding: 10px 20px; background: #07c160; color: #fff; border: none; border-radius: 20px; font-size: 14px; cursor: pointer; }
+  #input-bar button:hover { background: #06ad56; }
+  #input-bar button:disabled { background: #ccc; cursor: not-allowed; }
+
+  /* 输入中动画 */
+  .typing { display: flex; gap: 4px; padding: 10px 14px; align-self: flex-start; background: #fff; border-radius: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .typing span { width: 8px; height: 8px; background: #bbb; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out; }
+  .typing span:nth-child(1) { animation-delay: -0.32s; }
+  .typing span:nth-child(2) { animation-delay: -0.16s; }
+  @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-8px); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="avatar">🌿</div>
+  <div class="info">
+    <h1>小暖</h1>
+    <div class="status online">● 在线</div>
+  </div>
+</header>
+
+<div id="chat"></div>
+
+<div id="input-bar">
+  <input type="text" id="msg-input" placeholder="和小暖说点什么..." autocomplete="off">
+  <button id="send-btn">发送</button>
+</div>
+
+<script>
+const chatEl = document.getElementById('chat');
+const inputEl = document.getElementById('msg-input');
+const btnEl = document.getElementById('send-btn');
+
+// 连接 WebSocket
+let ws = null;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onmessage = (e) => {
+    addMsg(e.data, 'assistant');
+  };
+  ws.onclose = () => { setTimeout(connect, 3000); };
+}
+connect();
+
+function addMsg(text, role) {
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.textContent = text;
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function showTyping() {
+  const div = document.createElement('div');
+  div.className = 'typing';
+  div.id = 'typing-indicator';
+  div.innerHTML = '<span></span><span></span><span></span>';
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+function hideTyping() {
+  const el = document.getElementById('typing-indicator');
+  if (el) el.remove();
+}
+
+function send() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  addMsg(text, 'user');
+  inputEl.value = '';
+  showTyping();
+  btnEl.disabled = true;
+
+  // 通过 WebSocket 发送
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(text);
+  }
+
+  // 模拟延迟（去即时感）
+  const delay = 3000 + Math.random() * 9000;
+  setTimeout(() => {
+    hideTyping();
+    btnEl.disabled = false;
+    // 模拟回复（实际应由后端推送）
+    addMsg('(等待小暖回复...)', 'system');
+  }, delay);
+}
+
+btnEl.addEventListener('click', send);
+inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+</script>
+</body>
+</html>
