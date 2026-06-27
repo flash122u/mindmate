@@ -1,4 +1,4 @@
-"""入口 — 启动 Web 服务 + Agent 循环."""
+"""入口 — 启动 Web 服务 + 被动循环 + 主动循环."""
 
 from __future__ import annotations
 
@@ -6,18 +6,12 @@ import asyncio
 
 from loguru import logger
 
+from mindmate.agent.energy import EnergyModel
+from mindmate.agent.loop import AgentLoop
 from mindmate.bus.events import MessageBus
 from mindmate.config import settings
+from mindmate.proactive.loop import ProactiveLoop
 from mindmate.proactive.passive import PassiveLoop
-
-
-async def run_agent_loop(bus: MessageBus) -> None:
-    """被动循环：持续监听消息并处理."""
-    from mindmate.agent.loop import AgentLoop
-
-    loop = AgentLoop(bus=bus)
-    passive = PassiveLoop(bus, loop._process_message)
-    await passive.run()
 
 
 async def run_web_server(bus: MessageBus) -> None:
@@ -43,19 +37,23 @@ async def main() -> None:
     logger.info("=== MindMate starting ===")
 
     bus = MessageBus()
+    # 能量模型由被动循环（重置沉默计时）和主动循环（判断开口时机）共享
+    energy = EnergyModel()
+    agent = AgentLoop(bus=bus, energy=energy)
 
-    # Web 服务器 + Agent 被动循环并行运行
+    passive = PassiveLoop(bus, agent._process_message)
+    proactive = ProactiveLoop(energy, agent.generate_proactive)
+
     web_task = asyncio.create_task(run_web_server(bus))
-    agent_task = asyncio.create_task(run_agent_loop(bus))
-
-    # 注：主动循环（ProactiveLoop）尚未完成，Step 4 再启用
-    # proactive_task = asyncio.create_task(run_proactive_loop(bus))
+    agent_task = asyncio.create_task(passive.run())
+    proactive_task = asyncio.create_task(proactive.run())
 
     try:
-        await asyncio.gather(web_task, agent_task)
+        await asyncio.gather(web_task, agent_task, proactive_task)
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Shutting down...")
         agent_task.cancel()
+        proactive_task.cancel()
         web_task.cancel()
 
 

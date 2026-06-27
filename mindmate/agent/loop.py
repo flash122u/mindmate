@@ -7,6 +7,7 @@ RESTORE → COMPACT → BUILD → RUN → SAVE → RESPOND → DONE
 from __future__ import annotations
 
 import asyncio
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,13 +74,19 @@ class AgentLoop:
 你：不想聊这个啦，说点别的吧"""
 
     def __init__(
-        self, bus: Any, workspace: Path | None = None, delays_enabled: bool = True
+        self,
+        bus: Any,
+        workspace: Path | None = None,
+        delays_enabled: bool = True,
+        energy: Any = None,
     ) -> None:
         self.bus = bus
         self.provider = DeepSeekProvider()
         self.memory = MemoryStore(workspace)
         self.defense = DefenseMechanism()
         self.relationship = RelationshipManager(self.memory)
+        # 能量模型（主动行为调度）；与 ProactiveLoop 共享同一实例
+        self.energy = energy
         # 是否启用"不秒回"延迟（测试时可关闭）
         self.delays_enabled = delays_enabled
         self._running = False
@@ -144,22 +151,96 @@ class AgentLoop:
         self.memory.append_history("user", msg.content, context.session_key)
         self.memory.append_history("assistant", full_text, context.session_key)
 
-        # 5. 更新关系阶段（根据情感倾向）
+        # 5. 更新关系阶段（根据情感倾向）+ 重置能量沉默计时
         self.relationship.update(msg.content, context.session_key)
+        if self.energy is not None:
+            self.energy.on_user_message()
 
         # 6. 分段 + 打字延迟，逐条发到 outbound 总线
-        await self._deliver_segments(msg, full_text)
+        await self._deliver_segments(
+            msg.channel, msg.chat_id, full_text, proactive=False
+        )
         return None
 
-    async def _deliver_segments(self, msg: InboundMessage, full_text: str) -> None:
+    async def generate_proactive(self, session_key: str = "default") -> None:
+        """主动开口：不回应具体问题，自然地发起一段对话.
+
+        由 ProactiveLoop 在合适时机调用。生成内容经分段后逐条投递，
+        并存入历史，使后续对话保持连贯。
+        """
+        logger.info("Generating proactive message for {}", session_key)
+
+        soul = self.memory.read_soul()
+        relationship_prompt = self.relationship.build_relationship_prompt(session_key)
+        history = self.memory.read_history_as_messages(session_key, max_turns=10)
+        nudge = self._proactive_nudge()
+
+        system_parts = [
+            f"## 你是谁\n{soul}",
+            "",
+            relationship_prompt,
+            "",
+            self._STYLE_RULES,
+            "",
+            self._FEWSHOT,
+        ]
+        messages = [
+            {"role": "system", "content": "\n".join(system_parts)},
+            *history,
+            {"role": "user", "content": nudge},
+        ]
+
+        response = await self.provider.chat(messages=messages, temperature=0.9)
+        full_text = (response["content"] or "").strip()
+        if not full_text:
+            return
+
+        # 主动消息只存 assistant 历史（nudge 是内部指令，不持久化）
+        self.memory.append_history("assistant", full_text, session_key)
+
+        await self._deliver_segments("web", session_key, full_text, proactive=True)
+
+    def _proactive_nudge(self) -> str:
+        """根据时间/随机意图，生成主动开口的内部指令（不持久化）."""
+        from datetime import datetime
+
+        hour = datetime.now().hour
+        if 5 <= hour < 11:
+            period = "早上"
+        elif 11 <= hour < 14:
+            period = "中午"
+        elif 14 <= hour < 18:
+            period = "下午"
+        elif 18 <= hour < 23:
+            period = "晚上"
+        else:
+            period = "深夜"
+
+        intents = [
+            "随口问候一下，看看对方最近怎么样",
+            "分享你今天遇到的一件无关紧要的小事（编一个就好，像生活碎屑）",
+            "因为有一阵没聊了，有点想ta，主动关心一下",
+            "突然想起之前聊过的事，顺嘴提一句",
+        ]
+        intent = random.choice(intents)
+        return (
+            f"（现在是{period}，对方已经有一阵子没说话了。你想主动发消息找ta。"
+            f"这次的意图是：{intent}。"
+            "不要回应任何具体问题，自然地开启对话，简短、随意，"
+            "像朋友突然发来的消息。）"
+        )
+
+    async def _deliver_segments(
+        self, channel: str, chat_id: str, full_text: str, *, proactive: bool
+    ) -> None:
         """把回复拆成多条短消息，带打字延迟逐条投递."""
         segments = split_message(full_text) or [full_text]
         for seg in segments:
             # 先发"正在输入"信号
             await self.bus.publish_outbound(
                 OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
+                    channel=channel,
+                    chat_id=chat_id,
                     content="",
                     metadata={"event": "typing"},
                 )
@@ -168,10 +249,10 @@ class AgentLoop:
                 await asyncio.sleep(typing_delay(seg))
             await self.bus.publish_outbound(
                 OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
+                    channel=channel,
+                    chat_id=chat_id,
                     content=seg,
-                    metadata={"event": "message", "proactive": False},
+                    metadata={"event": "message", "proactive": proactive},
                 )
             )
 

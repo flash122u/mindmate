@@ -1,94 +1,63 @@
-"""主动行为循环."""
+"""主动行为循环 — 能量模型驱动，LLM 生成自然的主动消息.
+
+不再用硬编码模板（那会像骚扰）。而是：
+1. 定时检查能量模型，判断此刻是否适合主动开口
+2. 适合 → 调用 AgentLoop.generate_proactive() 用 LLM 生成自然消息
+3. 发过后进入冷却
+"""
 
 from __future__ import annotations
 
 import asyncio
-import random
+from collections.abc import Awaitable, Callable
 
 from loguru import logger
 
 from mindmate.agent.energy import EnergyModel
-from mindmate.bus.events import MessageBus, OutboundMessage
 
 
 class ProactiveLoop:
-    """
-    主动循环 — 能量模型驱动的主动触发.
+    """主动循环 — 在合适时机让 Agent 主动找对方."""
 
-    工作流程：
-    1. 每 tick 检查能量级别
-    2. HIGH → 暂停
-    3. NORMAL → 可能发送问候/关心
-    4. LOW → 可能发送日常废话/分享
-    5. Drift → 无事可做时执行后台维护
-    """
-
-    def __init__(self, bus: MessageBus, energy: EnergyModel) -> None:
-        self.bus = bus
+    def __init__(
+        self,
+        energy: EnergyModel,
+        generate_cb: Callable[[], Awaitable[None]],
+        check_interval_s: float = 60.0,
+        session_key: str = "default",
+    ) -> None:
+        """
+        Args:
+            energy: 与 AgentLoop 共享的能量模型
+            generate_cb: 生成并投递一条主动消息的异步回调
+            check_interval_s: 每隔多久检查一次是否该开口
+            session_key: 目标会话
+        """
         self.energy = energy
+        self.generate_cb = generate_cb
+        self.check_interval_s = check_interval_s
+        self.session_key = session_key
         self._running = False
-
-        # 主动消息模板池
-        self._greetings = [
-            "今天过得怎么样？",
-            "嘿，在干嘛呢～",
-            "突然想你了，你今天还好吗？",
-            "外面天气不错吧？",
-        ]
-        self._small_talk = [
-            "刚刚看到一只很可爱的猫，想到你了",
-            "今天喝到一杯很好喝的奶茶",
-            "路上遇到一个很奇怪的人，哈哈",
-            "你知道吗，我今天发现了一个冷知识：树懒一天睡15个小时",
-        ]
-        self._care = [
-            "好久没聊了，有点担心你",
-            "希望你今天一切都好",
-            "记得按时吃饭哦",
-        ]
 
     async def run(self) -> None:
         self._running = True
-        logger.info("ProactiveLoop started")
+        logger.info("ProactiveLoop started (check every {}s)", self.check_interval_s)
 
         while self._running:
             try:
-                level, interval = self.energy.tick()
-
-                if interval > 0:
-                    await asyncio.sleep(interval)
+                await asyncio.sleep(self.check_interval_s)
+                ok, reason = self.energy.should_reach_out()
+                if not ok:
+                    logger.debug("Proactive skip: {}", reason)
                     continue
 
-                # 能量级别 HIGH 时不主动发消息
-                if level == "HIGH":
-                    await asyncio.sleep(10)
-                    continue
-
-                # 随机决定是否主动发消息（降低频率，避免刷屏）
-                if random.random() < 0.3:
-                    msg = self._pick_message(level)
-                    logger.info("Proactive: [%s] %s", level, msg)
-                    await self.bus.publish_outbound(
-                        OutboundMessage(
-                            channel="web",
-                            chat_id="default",
-                            content=msg,
-                            metadata={"proactive": True, "level": level},
-                        )
-                    )
-                    self.energy.reset()
-                else:
-                    await asyncio.sleep(60)
-
+                logger.info("Proactive: reaching out")
+                await self.generate_cb()
+                self.energy.mark_proactive()
+            except asyncio.CancelledError:
+                break
             except Exception:
                 logger.exception("Error in proactive loop")
-
-    def _pick_message(self, level: str) -> str:
-        if level == "NORMAL":
-            return random.choice(self._greetings)
-        elif level == "LOW":
-            return random.choice(self._small_talk)
-        return random.choice(self._care)
 
     def stop(self) -> None:
         self._running = False
