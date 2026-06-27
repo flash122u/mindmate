@@ -36,6 +36,8 @@ class Settings:
             os.getenv("INNER_LIFE_ENABLED", "true").lower() == "true"
         )
         self.inner_life_hour: int = int(os.getenv("INNER_LIFE_HOUR", "3"))
+        # 小暖自己所在的城市（用于主动感知天气，方向 A）
+        self.home_city: str = os.getenv("HOME_CITY", "杭州")
         # 工具开关 + MCP server 配置（JSON 字符串）
         self.tools_enabled: bool = (
             os.getenv("TOOLS_ENABLED", "true").lower() == "true"

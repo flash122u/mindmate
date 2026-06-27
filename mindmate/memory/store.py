@@ -247,19 +247,25 @@ class MemoryStore:
         ]
 
     def read_history_as_messages(
-        self, session_key: str = "default", max_turns: int = 20
+        self, session_key: str = "default", max_turns: int = 40
     ) -> list[dict[str, str]]:
         """读取最近历史，重建为标准多轮对话格式（role/content）.
 
-        这是让对话连贯的关键：返回真正的 user/assistant 交替消息列表，
-        而不是塞进 system prompt 的文本块。
+        连贯性的关键。一条回复可能被拆成多条短消息分别存储（每段一行），
+        这里把**连续同角色**的行合并回一条，使 LLM 看到的是完整的一轮，
+        而前端按行展示则是分段气泡——两边各取所需。
         """
         entries = self.read_history(session_key, max_turns)
-        return [
-            {"role": e["role"], "content": e["content"]}
-            for e in entries
-            if e["role"] in ("user", "assistant")
-        ]
+        merged: list[dict[str, str]] = []
+        for e in entries:
+            role = e["role"]
+            if role not in ("user", "assistant"):
+                continue
+            if merged and merged[-1]["role"] == role:
+                merged[-1]["content"] += e["content"]
+            else:
+                merged.append({"role": role, "content": e["content"]})
+        return merged
 
     def read_recent_for_prompt(self, session_key: str = "default", max_entries: int = 20) -> str:
         """读取最近历史，格式化为文本（用于摘要/调试，非对话上下文）."""

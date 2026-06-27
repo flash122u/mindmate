@@ -54,6 +54,10 @@ class ToolRegistry:
     def is_empty(self) -> bool:
         return not self._tools
 
+    def get(self, name: str) -> Tool | None:
+        """按名取工具（不存在返回 None）."""
+        return self._tools.get(name)
+
     def names(self) -> list[str]:
         return list(self._tools.keys())
 

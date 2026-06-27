@@ -15,6 +15,7 @@ from typing import Any
 from loguru import logger
 
 from mindmate.bus.events import InboundMessage, OutboundMessage
+from mindmate.config import settings
 from mindmate.llm import DeepSeekProvider
 from mindmate.memory import MemoryStore
 from mindmate.personality.defense import DefenseMechanism
@@ -106,6 +107,9 @@ class AgentLoop:
         self.dream = DreamAgent(self.memory, self.provider)
         # 吐露私密的概率（仅在关系深 + 强情绪共鸣时才考虑）
         self.share_prob = 0.3
+        # 小暖自己所在的城市 + 主动分享天气的概率（方向 A）
+        self.home_city = settings.home_city
+        self.weather_share_prob = 0.4
         # 风险检测
         self.crisis = CrisisDetector(self.memory)
         # 能量模型（主动行为调度）；与 ProactiveLoop 共享同一实例
@@ -167,19 +171,22 @@ class AgentLoop:
 
         # 3. 调用 LLM（带工具调用循环）
         full_text = await self._run_llm(context.messages)
+        segments = split_message(full_text) or [full_text]
 
-        # 4. 保存历史（存完整回复，保证上下文连贯；按 role 独立存储）
+        # 4. 保存历史：用户一行 + 每个分段各一行（前端按行显示分段气泡，
+        #    LLM 上下文会自动把连续 assistant 行合并回一轮）
         self.memory.append_history("user", msg.content, context.session_key)
-        self.memory.append_history("assistant", full_text, context.session_key)
+        for seg in segments:
+            self.memory.append_history("assistant", seg, context.session_key)
 
         # 5. 更新关系阶段（根据情感倾向）+ 重置该用户的能量沉默计时
         self.relationship.update(msg.content, context.session_key)
         if self.energy is not None:
             self.energy.get(context.session_key).on_user_message()
 
-        # 6. 分段 + 打字延迟，逐条发到 outbound 总线
+        # 6. 打字延迟，逐条发到 outbound 总线
         await self._deliver_segments(
-            msg.channel, msg.chat_id, full_text, proactive=False
+            msg.channel, msg.chat_id, segments, proactive=False
         )
 
         # 7. 后台沉淀记忆：提取情绪锚点 + 整合长期记忆（不阻塞回复）
@@ -240,7 +247,9 @@ class AgentLoop:
         soul = self.memory.read_soul()
         relationship_prompt = self.relationship.build_relationship_prompt(session_key)
         history = self.memory.read_history_as_messages(session_key, max_turns=10)
-        nudge = self._proactive_nudge()
+        # 方向 A：小暖感知自己城市的真实天气，借此自然开启对话
+        weather_hint = await self._home_weather_hint()
+        nudge = self._proactive_nudge(weather_hint)
 
         system_parts = [
             f"## 你是谁\n{soul}",
@@ -262,12 +271,37 @@ class AgentLoop:
         if not full_text:
             return
 
-        # 主动消息只存 assistant 历史（nudge 是内部指令，不持久化）
-        self.memory.append_history("assistant", full_text, session_key)
+        # 主动消息按分段存 assistant 历史（nudge 是内部指令，不持久化）
+        segments = split_message(full_text) or [full_text]
+        for seg in segments:
+            self.memory.append_history("assistant", seg, session_key)
 
-        await self._deliver_segments("web", session_key, full_text, proactive=True)
+        await self._deliver_segments("web", session_key, segments, proactive=True)
 
-    def _proactive_nudge(self) -> str:
+    async def _home_weather_hint(self) -> str:
+        """按概率获取小暖所在城市的真实天气，作为主动开口的素材.
+
+        这是"方向 A"：天气服务于小暖自己的生活感知（她有自己的城市），
+        而非查询用户位置——更贴合"伙伴有自己的世界"的设定。
+        """
+        if not self.tools or random.random() > self.weather_share_prob:
+            return ""
+        wt = self.tools.get("get_weather")
+        if wt is None:
+            return ""
+        try:
+            w = await wt.execute(location=self.home_city)
+        except Exception:
+            return ""
+        if not w or w.startswith("["):
+            return ""
+        return (
+            f"\n你此刻在{self.home_city}，那边的天气是：{w}。"
+            "可以很自然地提一句你这边的天气，或借天气状态关心一下对方"
+            "（比如下雨就提醒带伞、变冷就让ta加衣），别像播报天气。"
+        )
+
+    def _proactive_nudge(self, weather_hint: str = "") -> str:
         """根据时间/随机意图，生成主动开口的内部指令（不持久化）."""
         from datetime import datetime
 
@@ -293,15 +327,15 @@ class AgentLoop:
         return (
             f"（现在是{period}，对方已经有一阵子没说话了。你想主动发消息找ta。"
             f"这次的意图是：{intent}。"
+            f"{weather_hint}"
             "不要回应任何具体问题，自然地开启对话，简短、随意，"
             "像朋友突然发来的消息。）"
         )
 
     async def _deliver_segments(
-        self, channel: str, chat_id: str, full_text: str, *, proactive: bool
+        self, channel: str, chat_id: str, segments: list[str], *, proactive: bool
     ) -> None:
-        """把回复拆成多条短消息，带打字延迟逐条投递."""
-        segments = split_message(full_text) or [full_text]
+        """把已分段的多条短消息，带打字延迟逐条投递."""
         for seg in segments:
             # 先发"正在输入"信号
             await self.bus.publish_outbound(

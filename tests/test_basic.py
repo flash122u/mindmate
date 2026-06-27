@@ -78,6 +78,31 @@ def test_history_as_messages():
         store.close()
 
 
+def test_history_merges_consecutive_assistant_segments():
+    """一轮回复存成多条 assistant 行 → LLM 上下文合并回一条."""
+    store = MemoryStore()
+    try:
+        store.append_history("user", "我好累", session_key="hm")
+        # 一轮回复的 3 个分段
+        store.append_history("assistant", "怎么啦？", session_key="hm")
+        store.append_history("assistant", "是工作的事吗？", session_key="hm")
+        store.append_history("assistant", "先别急。", session_key="hm")
+        store.append_history("user", "嗯", session_key="hm")
+        msgs = store.read_history_as_messages(session_key="hm")
+        # 合并后应是 user / assistant(合并) / user 三条
+        assert len(msgs) == 3
+        assert msgs[0]["role"] == "user"
+        assert msgs[1]["role"] == "assistant"
+        assert msgs[1]["content"] == "怎么啦？是工作的事吗？先别急。"
+        assert msgs[2]["role"] == "user"
+        # 但原始行仍是分开存的（前端按行显示分段气泡）
+        rows = store.read_history(session_key="hm")
+        assistant_rows = [r for r in rows if r["role"] == "assistant"]
+        assert len(assistant_rows) == 3
+    finally:
+        store.close()
+
+
 def test_history_recent_for_prompt():
     store = MemoryStore()
     try:
