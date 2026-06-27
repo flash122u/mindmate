@@ -79,6 +79,8 @@ class AgentLoop:
 你：诶怎么突然问这个
 你：不想聊这个啦，说点别的吧"""
 
+    _MAX_TOOL_ROUNDS = 4
+
     def __init__(
         self,
         bus: Any,
@@ -86,10 +88,13 @@ class AgentLoop:
         delays_enabled: bool = True,
         energy: Any = None,
         memory_maintenance: bool = True,
+        tools: Any = None,
     ) -> None:
         self.bus = bus
         self.provider = DeepSeekProvider()
         self.memory = MemoryStore(workspace)
+        # 工具注册表（None 或空 → 退化为单轮对话，行为不变）
+        self.tools = tools
         self.defense = DefenseMechanism()
         self.relationship = RelationshipManager(self.memory)
         # 情绪锚点 + 记忆整合 + 遗忘
@@ -160,12 +165,8 @@ class AgentLoop:
         if self.delays_enabled:
             await asyncio.sleep(think_delay(msg.content))
 
-        # 3. 调用 LLM
-        response = await self.provider.chat(
-            messages=context.messages,
-            temperature=0.7,
-        )
-        full_text = response["content"] or ""
+        # 3. 调用 LLM（带工具调用循环）
+        full_text = await self._run_llm(context.messages)
 
         # 4. 保存历史（存完整回复，保证上下文连贯；按 role 独立存储）
         self.memory.append_history("user", msg.content, context.session_key)
@@ -185,6 +186,39 @@ class AgentLoop:
         if self.memory_maintenance:
             asyncio.create_task(self._post_turn_memory(context.session_key))
         return None
+
+    async def _run_llm(self, messages: list[dict[str, Any]]) -> str:
+        """调用 LLM；若注册了工具则进入工具调用循环.
+
+        无工具时退化为单轮 chat（与原行为完全一致）。
+        有工具时：chat → 模型要调工具 → 执行 → 把结果喂回 → 再 chat，
+        直到模型给出最终文本，或达到最大回合数。
+        """
+        if self.tools is None or self.tools.is_empty():
+            resp = await self.provider.chat(messages=messages, temperature=0.7)
+            return resp.get("content") or ""
+
+        work = list(messages)
+        for _ in range(self._MAX_TOOL_ROUNDS):
+            resp = await self.provider.chat(
+                messages=work,
+                tools=self.tools.schemas(),
+                temperature=0.7,
+            )
+            tool_calls = resp.get("tool_calls")
+            if not tool_calls:
+                return resp.get("content") or ""
+            # 把助手的"调用工具"这一回合追加进对话
+            work.append(resp["raw_message"])
+            for tc in tool_calls:
+                logger.info("Tool call: {}({})", tc["name"], tc["arguments"])
+                result = await self.tools.execute(tc["name"], tc["arguments"])
+                work.append(
+                    {"role": "tool", "tool_call_id": tc["id"], "content": result}
+                )
+        # 回合用尽，强制要一个不带工具的最终回复
+        resp = await self.provider.chat(messages=work, temperature=0.7)
+        return resp.get("content") or ""
 
     async def _post_turn_memory(self, session_key: str) -> None:
         """对话后的记忆维护：提取情绪锚点、整合长期记忆、遗忘陈旧锚点."""

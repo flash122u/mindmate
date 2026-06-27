@@ -36,7 +36,26 @@ class Settings:
             os.getenv("INNER_LIFE_ENABLED", "true").lower() == "true"
         )
         self.inner_life_hour: int = int(os.getenv("INNER_LIFE_HOUR", "3"))
+        # 工具开关 + MCP server 配置（JSON 字符串）
+        self.tools_enabled: bool = (
+            os.getenv("TOOLS_ENABLED", "true").lower() == "true"
+        )
+        self.mcp_servers: dict = self._parse_mcp_servers(os.getenv("MCP_SERVERS", ""))
         ensure_dirs()
+
+    @staticmethod
+    def _parse_mcp_servers(raw: str) -> dict:
+        """解析 MCP_SERVERS 环境变量（JSON），失败则返回空."""
+        import json
+
+        raw = (raw or "").strip()
+        if not raw:
+            return {}
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
 
 
 # 全局配置实例

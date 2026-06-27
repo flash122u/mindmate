@@ -13,6 +13,22 @@ from mindmate.bus.events import MessageBus
 from mindmate.config import settings
 from mindmate.proactive.loop import ProactiveLoop
 from mindmate.proactive.passive import PassiveLoop
+from mindmate.tools import ToolRegistry, WeatherTool
+from mindmate.tools.mcp_client import MCPManager
+
+
+async def build_tools() -> tuple[ToolRegistry | None, MCPManager | None]:
+    """构建工具注册表：内置工具 + MCP server 工具."""
+    if not settings.tools_enabled:
+        return None, None
+    registry = ToolRegistry()
+    registry.register(WeatherTool())
+    mcp = MCPManager(settings.mcp_servers)
+    try:
+        await mcp.connect(registry)
+    except Exception:
+        logger.exception("MCP connect failed, continuing with built-in tools")
+    return registry, mcp
 
 
 async def run_web_server(bus: MessageBus) -> None:
@@ -38,9 +54,13 @@ async def main() -> None:
     logger.info("=== MindMate starting ===")
 
     bus = MessageBus()
+    # 工具：内置（天气）+ MCP server
+    tools, mcp = await build_tools()
+    if tools is not None:
+        logger.info("Tools enabled: {}", tools.names())
     # 能量注册表：每个用户独立的沉默计时/冷却/每日计数
     energy = EnergyRegistry()
-    agent = AgentLoop(bus=bus, energy=energy)
+    agent = AgentLoop(bus=bus, energy=energy, tools=tools)
 
     passive = PassiveLoop(bus, agent._process_message)
     proactive = ProactiveLoop(
@@ -68,6 +88,9 @@ async def main() -> None:
         logger.info("Shutting down...")
         for t in tasks:
             t.cancel()
+    finally:
+        if mcp is not None:
+            await mcp.close()
 
 
 if __name__ == "__main__":
