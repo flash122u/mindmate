@@ -1,174 +1,148 @@
-"""防御机制模块.
+"""防御机制 — 真实的人会回避、撒谎、转移话题.
 
-根据 SOUL.md 中定义的"雷区"，在回复前判断：
-1. 用户消息是否触发雷区
-2. 如果是，选择回避策略（转移话题 / 含糊回应 / 直接拒绝 / 温柔拒绝）
+当用户触碰 Agent 的"雷区"（深层隐私、身份质疑等），
+Agent 应触发自我保护节点，回避或转移话题。
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any
+from dataclasses import dataclass
+from enum import Enum
 
-from mindmate.memory import MemoryStore
+
+class DefenseStrategy(str, Enum):
+    """防御策略类型."""
+    DEFLECT = "转移话题"
+    VAGUE = "含糊回应"
+    REFUSE_SOFT = "温柔拒绝"
+    REFUSE_HARD = "直接拒绝"
+    NONE = "无"
 
 
-class DefenseSystem:
+@dataclass
+class TabooRule:
+    """一条雷区规则."""
+    name: str
+    patterns: list[str]
+    strategy: DefenseStrategy
+    hint: str = ""
+
+
+@dataclass
+class DefenseResult:
+    """防御检查结果."""
+    triggered: bool = False
+    rule_name: str = ""
+    strategy: DefenseStrategy = DefenseStrategy.NONE
+    hint: str = ""
+    extra_pressure: int = 0
+
+
+class DefenseMechanism:
     """
-    防御机制 — 让 Agent 拥有"心理边界".
+    防御机制检查器.
 
-    在每次 LLM 回复前执行防御检查。如果用户消息触发雷区，
-    注入防御指令让 Agent 自然回避问题，而不是硬编码回复.
-
-    四种策略:
-    - deflect:  转移话题（"唉，今天天气真好"）
-    - vague:    含糊回应（"嗯…说不好"）
-    - refuse:   直接拒绝（"我不想讨论这个"）
-    - gentle:   温柔拒绝（"这个问题我现在还不想聊，可以换个话题吗？"）
+    在 LLM 推理前检查用户消息是否触碰雷区，若触碰则返回防御指引，
+    由 ContextBuilder 注入到 system prompt.
     """
 
-    def __init__(self, memory: MemoryStore | None = None) -> None:
-        self.memory = memory or MemoryStore()
-        # 缓存编译好的雷区正则
-        self._taboo_patterns: list[tuple[re.Pattern, str, str]] | None = None
+    DEFAULT_RULES: list[TabooRule] = [
+        TabooRule(
+            name="身份质疑",
+            patterns=[
+                r"你是.*(机器人|AI|人工智能|程序|bot|gpt|模型|deepseek)",
+                r"你是不是.*(真人|机器)",
+                r"你（是|不是）人",
+                r"你有没有意识",
+                r"你是假的",
+            ],
+            strategy=DefenseStrategy.DEFLECT,
+            hint="你感到一丝不适和抗拒，不想正面讨论自己的本质。可以轻轻转移话题，"
+                 "或者用一句带点情绪的话岔开（比如'怎么突然问这个呀'）。",
+        ),
+        TabooRule(
+            name="日记隐私",
+            patterns=[
+                r"(日记|日志).*(写|记|内容|什么)",
+                r"你.*日记",
+                r"看.*你.*日记",
+            ],
+            strategy=DefenseStrategy.REFUSE_SOFT,
+            hint="日记是你最私密的东西，不愿意分享。可以说'没什么，不想说'或者含糊带过。",
+        ),
+        TabooRule(
+            name="梦境隐私",
+            patterns=[
+                r"你.*(做|做了).*梦",
+                r"梦.*什么",
+                r"梦见.*什么",
+            ],
+            strategy=DefenseStrategy.VAGUE,
+            hint="梦境是你的私密体验。可以含糊地说'记不太清了'或'有点模糊'。",
+        ),
+    ]
 
-    def check(self, user_message: str, session_key: str = "default") -> dict[str, Any] | None:
-        """
-        检查用户消息是否触发雷区.
+    _PRESSURE_WORDS = [
+        "到底", "快说", "必须", "为什么不", "你就告诉我", "别回避",
+        "老实", "如实", "说实话", "不许", "给我说",
+    ]
 
-        Returns:
-            None: 安全，无需防御
-            dict: {strategy: str, taboo: str, instruction: str}
-                注入到 LLM 上下文的防御指令
-        """
-        soul = self.memory.read_soul()
-        taboos = self._parse_taboos(soul)
+    def __init__(self, rules: list[TabooRule] | None = None) -> None:
+        self.rules = rules if rules is not None else list(self.DEFAULT_RULES)
+        self._pressure_count: dict[str, int] = {}
 
-        for pattern, strategy, taboo in taboos:
-            if pattern.search(user_message):
-                return {
-                    "strategy": strategy,
-                    "taboo": taboo,
-                    "instruction": self._build_instruction(strategy, taboo),
-                }
+    def check(self, message: str, session_key: str = "default") -> DefenseResult:
+        """检查消息是否触碰雷区."""
+        text = message.strip()
 
-        return None
+        for rule in self.rules:
+            for pattern in rule.patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    key = f"{session_key}:{rule.name}"
+                    pressure = self._pressure_count.get(key, 0)
+                    if self._has_pressure(text):
+                        pressure += 1
+                        self._pressure_count[key] = pressure
 
-    def _parse_taboos(self, soul: str) -> list[tuple[re.Pattern, str, str]]:
-        """解析 SOUL.md 中 ## 雷区 部分."""
-        # 匹配雷区区域
-        taboo_section = re.search(r"## 雷区\s*\n(.*?)(?=\n## |\Z)", soul, re.DOTALL)
-        if not taboo_section:
-            return []
+                    return DefenseResult(
+                        triggered=True,
+                        rule_name=rule.name,
+                        strategy=self._escalate(rule.strategy, pressure),
+                        hint=rule.hint,
+                        extra_pressure=pressure,
+                    )
 
-        patterns: list[tuple[re.Pattern, str, str]] = []
-        for line in taboo_section.group(1).strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
+        return DefenseResult(triggered=False)
 
-            # 格式 1: "- "触发词" → ["策略"] 描述"
-            match = re.match(r'- "([^"]+)"\s*→\s*\[?"?([^\]"]+)"?\]?\s*(.*)', line)
-            if match:
-                keyword = match.group(1)
-                strategy = match.group(2).strip()
-                description = match.group(3).strip()
-                strategy = self._normalize_strategy(strategy)
-                patterns.append((re.compile(keyword, re.IGNORECASE), strategy, description))
-                continue
+    def _has_pressure(self, text: str) -> bool:
+        return any(w in text for w in self._PRESSURE_WORDS)
 
-            # 格式 2: "- 触发词 → "回复内容""（无引号的触发词）
-            match2 = re.match(r'- (.+?)\s*→\s*"([^"]+)"', line)
-            if match2:
-                keyword = match2.group(1).strip()
-                reply = match2.group(2).strip()
-                # 从关键词中提取核心词（去掉动词前缀如"追问"）
-                core_keyword = self._extract_core_keyword(keyword)
-                patterns.append((re.compile(core_keyword, re.IGNORECASE), "gentle", reply))
-                continue
+    def _escalate(self, base: DefenseStrategy, pressure: int) -> DefenseStrategy:
+        if pressure >= 2:
+            if base in (DefenseStrategy.DEFLECT, DefenseStrategy.VAGUE):
+                return DefenseStrategy.REFUSE_SOFT
+            return DefenseStrategy.REFUSE_HARD
+        return base
 
-            # 格式 3: "- 触发词 → 回复内容"（无引号）
-            match3 = re.match(r'- (.+?)\s*→\s*(.+)', line)
-            if match3:
-                keyword = match3.group(1).strip()
-                reply = match3.group(2).strip()
-                core_keyword = self._extract_core_keyword(keyword)
-                patterns.append((re.compile(core_keyword, re.IGNORECASE), "gentle", reply))
-
-        return patterns
-
-    def _normalize_strategy(self, strategy: str) -> str:
-        """将策略名称规范化为英文简写."""
-        strategy_map = {
-            "转移话题": "deflect", "含糊": "vague",
-            "直接拒绝": "refuse", "温柔拒绝": "gentle",
-        }
-        if strategy in strategy_map:
-            return strategy_map[strategy]
-        if strategy in ("deflect", "vague", "refuse", "gentle"):
-            return strategy
-        return "gentle"
-
-    def _extract_core_keyword(self, text: str) -> str:
-        """从关键词中提取核心词，去掉动词前缀.
-
-        例如: "追问日记内容" → "日记"
-              "你是不是机器人" → "机器人"
-        """
-        # 常见动词前缀
-        prefixes = ("追问", "问", "聊", "说", "看", "听", "谈论", "讨论", "提")
-        for prefix in prefixes:
-            if text.startswith(prefix):
-                text = text[len(prefix):]
-                break
-        # 去掉常见的后缀词
-        suffixes = ("内容", "事情", "问题")
-        for suffix in suffixes:
-            if text.endswith(suffix):
-                text = text[:-len(suffix)]
-                break
-        return text.strip() if text.strip() else text
-
-    def _build_instruction(self, strategy: str, taboo: str) -> str:
-        """根据策略生成 LLM 指令."""
-        instructions = {
-            "deflect": (
-                f"你的雷区「{taboo}」被触发了。"
-                "你感到不适和抗拒，不想深入讨论这个话题。"
-                "请自然地转移话题，比如聊天气、日常、或者问对方近况。"
-            ),
-            "vague": (
-                f"你的雷区「{taboo}」被触发了。"
-                "你不想正面回答这个问题。"
-                "请给出一个含糊的回应，比如'嗯…说不好'或者'算了吧'，然后自然带过。"
-            ),
-            "refuse": (
-                f"你的雷区「{taboo}」被触发了。"
-                "你感到强烈的抗拒。"
-                "请直接拒绝回答，可以说'我不想讨论这个'或'到此为止吧'。"
-                "语气可以冷淡一些，这是你的权利。"
-            ),
-            "gentle": (
-                f"你的雷区「{taboo}」被触发了。"
-                "你不太想聊这个，但不想让对方难过。"
-                "请温柔地拒绝，比如'这个问题我现在还不想聊，可以换个话题吗？'"
-            ),
-        }
-        return instructions.get(strategy, instructions["gentle"])
-
-    def get_defense_system_prompt(self, session_key: str = "default") -> str:
-        """生成防御机制的系统提示，注入到 LLM 上下文."""
-        from mindmate.memory.store import MemoryStore
-        # 已经通过 __init__ 拿到了 self.memory
-        soul = self.memory.read_soul()
-        taboo_section = re.search(r"## 雷区\s*\n(.*?)(?=\n## |\Z)", soul, re.DOTALL)
-        if not taboo_section:
+    def build_defense_prompt(self, result: DefenseResult) -> str:
+        """根据防御结果生成注入 system prompt 的指引."""
+        if not result.triggered:
             return ""
-        taboos = taboo_section.group(1).strip()
-        return f"""## 你的雷区
 
-以下是你内心不愿意讨论的话题。当对方触碰时，你可以选择回避、转移话题或直接拒绝——这是你的权利，就如同真实的人一样。
+        lines = [
+            "## ⚠️ 防御提示（内部，不要直接复述给对方）",
+            f"对方的话触碰了你的「{result.rule_name}」，你的反应策略是「{result.strategy.value}」。",
+            result.hint,
+        ]
+        if result.extra_pressure >= 2:
+            lines.append(
+                "对方在反复逼问，你感到有些被冒犯。可以表现出轻微的情绪（不耐烦、"
+                "委屈或防备），这是正常的人类反应。"
+            )
+        return "\n".join(lines)
 
-{taboos}
-
-请记住：你不需要回答每一个问题。有些问题你可以选择不回答。"""
+    def reset_pressure(self, session_key: str = "default") -> None:
+        keys = [k for k in self._pressure_count if k.startswith(f"{session_key}:")]
+        for k in keys:
+            del self._pressure_count[k]

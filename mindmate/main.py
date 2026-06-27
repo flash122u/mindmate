@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from loguru import logger
 
 from mindmate.bus.events import MessageBus
+from mindmate.channels.web import WebChannel
 from mindmate.config import settings
+from mindmate.proactive.loop import ProactiveLoop
+from mindmate.proactive.passive import PassiveLoop
 
 
 async def run_agent_loop(bus: MessageBus) -> None:
@@ -16,50 +20,17 @@ async def run_agent_loop(bus: MessageBus) -> None:
     from mindmate.agent.loop import AgentLoop
 
     loop = AgentLoop(bus=bus)
-    await loop.run()
+    passive = PassiveLoop(bus, loop._process_message)
+    await passive.run()
 
 
 async def run_proactive_loop(bus: MessageBus) -> None:
     """主动循环：定时触发问候/闲聊."""
-    from mindmate.proactive.loop import ProactiveLoop
+    from mindmate.agent.energy import EnergyModel
 
-    loop = ProactiveLoop(bus=bus)
-    await loop.run()
-
-
-async def run_outbound_consumer(bus: MessageBus) -> None:
-    """消费出站消息，分段推送到 WebSocket 客户端."""
-    from mindmate.utils.splitter import MessageSplitter
-
-    while True:
-        try:
-            msg = await bus.consume_outbound()
-            if not hasattr(bus, "push_to_clients"):
-                continue
-
-            push_fn = bus.push_to_clients
-            content = msg.content
-            is_proactive = msg.metadata.get("proactive", False) if msg.metadata else False
-
-            # 分段推送
-            segments = list(MessageSplitter.yield_segments(content))
-
-            for seg, delay, is_last in segments:
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                await push_fn(
-                    seg,
-                    metadata={
-                        **msg.metadata,
-                        "segment": True,
-                        "proactive": is_proactive,
-                        "is_last": is_last,
-                    },
-                )
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            logger.exception("Error pushing outbound")
+    energy = EnergyModel()
+    proactive = ProactiveLoop(bus, energy)
+    await proactive.run()
 
 
 async def run_web_server(bus: MessageBus) -> None:
@@ -68,25 +39,18 @@ async def run_web_server(bus: MessageBus) -> None:
     from mindmate.web.app import create_app
 
     app = create_app(bus)
-    config = uvicorn.Config(app, host=settings.host, port=settings.port, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
+    uvicorn.run(app, host=settings.host, port=settings.port)
 
 
 async def main() -> None:
     """主入口：启动所有组件."""
-    log_dir = Path("logs")
-    log_dir.mkdir(parents=True, exist_ok=True)
-    logger.add(str(log_dir / "mindmate.log"), rotation="10 MB", level="INFO")
+    logger.add("logs/mindmate.log", rotation="10 MB", level="INFO")
     logger.info("=== MindMate starting ===")
 
     bus = MessageBus()
 
-    # 启动 Web 服务器（阻塞，在后台线程跑 Uvicorn）
+    # 启动 Web 服务器（后台任务）
     web_task = asyncio.create_task(run_web_server(bus))
-
-    # 启动 outbound 消费者（把消息推给 WebSocket）
-    outbound_task = asyncio.create_task(run_outbound_consumer(bus))
 
     # 启动 Agent 被动循环
     agent_task = asyncio.create_task(run_agent_loop(bus))
@@ -96,11 +60,12 @@ async def main() -> None:
 
     # 保持运行
     try:
-        await asyncio.gather(web_task, agent_task, proactive_task, outbound_task)
+        await asyncio.gather(web_task, agent_task, proactive_task)
     except KeyboardInterrupt:
         logger.info("Shutting down...")
-        for t in [agent_task, proactive_task, web_task, outbound_task]:
-            t.cancel()
+        agent_task.cancel()
+        proactive_task.cancel()
+        web_task.cancel()
 
 
 if __name__ == "__main__":
