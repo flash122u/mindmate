@@ -1,5 +1,5 @@
-"""Proactive 模块 — 主动行为系统."""
+"""Proactive 模块 — 主动行为系统（Step 4 完善）."""
 
-from .energy import EnergyModel, EnergyState
+from .passive import PassiveLoop
 
-__all__ = ["EnergyModel", "EnergyState"]
+__all__ = ["PassiveLoop"]

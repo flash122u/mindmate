@@ -38,14 +38,41 @@ def test_memory_store_init():
 def test_history_append_and_read():
     store = MemoryStore()
     try:
-        c1 = store.append_history("hello")
-        c2 = store.append_history("world")
+        c1 = store.append_history("user", "hello", session_key="h1")
+        c2 = store.append_history("assistant", "world", session_key="h1")
         assert c1 < c2
-        entries = store.read_history(limit=10)
+        entries = store.read_history(session_key="h1", limit=10)
         assert len(entries) >= 2
         # 时间正序：hello 在前，world 在后
         assert entries[0]["content"] == "hello"
+        assert entries[0]["role"] == "user"
         assert entries[-1]["content"] == "world"
+        assert entries[-1]["role"] == "assistant"
+    finally:
+        store.close()
+
+
+def test_append_history_invalid_role():
+    import pytest
+    store = MemoryStore()
+    try:
+        with pytest.raises(ValueError):
+            store.append_history("robot", "hi")
+    finally:
+        store.close()
+
+
+def test_history_as_messages():
+    store = MemoryStore()
+    try:
+        store.append_history("user", "你好", session_key="h2")
+        store.append_history("assistant", "你好呀", session_key="h2")
+        store.append_history("user", "今天累吗", session_key="h2")
+        msgs = store.read_history_as_messages(session_key="h2")
+        assert len(msgs) == 3
+        assert msgs[0] == {"role": "user", "content": "你好"}
+        assert msgs[1] == {"role": "assistant", "content": "你好呀"}
+        assert all(m["role"] in ("user", "assistant") for m in msgs)
     finally:
         store.close()
 
@@ -53,9 +80,9 @@ def test_history_append_and_read():
 def test_history_recent_for_prompt():
     store = MemoryStore()
     try:
-        store.append_history("[user] 你好")
-        store.append_history("[Assistant] 你好呀")
-        prompt = store.read_recent_for_prompt(max_entries=20)
+        store.append_history("user", "你好", session_key="h3")
+        store.append_history("assistant", "你好呀", session_key="h3")
+        prompt = store.read_recent_for_prompt(session_key="h3", max_entries=20)
         assert "你好" in prompt
         assert "你好呀" in prompt
     finally:

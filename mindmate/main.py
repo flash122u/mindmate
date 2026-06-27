@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
-from pathlib import Path
 
 from loguru import logger
 
 from mindmate.bus.events import MessageBus
-from mindmate.channels.web import WebChannel
 from mindmate.config import settings
-from mindmate.proactive.loop import ProactiveLoop
 from mindmate.proactive.passive import PassiveLoop
 
 
@@ -24,22 +20,21 @@ async def run_agent_loop(bus: MessageBus) -> None:
     await passive.run()
 
 
-async def run_proactive_loop(bus: MessageBus) -> None:
-    """主动循环：定时触发问候/闲聊."""
-    from mindmate.agent.energy import EnergyModel
-
-    energy = EnergyModel()
-    proactive = ProactiveLoop(bus, energy)
-    await proactive.run()
-
-
 async def run_web_server(bus: MessageBus) -> None:
-    """启动 FastAPI Web 服务."""
+    """启动 FastAPI Web 服务（异步，不阻塞事件循环）."""
     import uvicorn
+
     from mindmate.web.app import create_app
 
     app = create_app(bus)
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    config = uvicorn.Config(
+        app,
+        host=settings.host,
+        port=settings.port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 async def main() -> None:
@@ -49,22 +44,18 @@ async def main() -> None:
 
     bus = MessageBus()
 
-    # 启动 Web 服务器（后台任务）
+    # Web 服务器 + Agent 被动循环并行运行
     web_task = asyncio.create_task(run_web_server(bus))
-
-    # 启动 Agent 被动循环
     agent_task = asyncio.create_task(run_agent_loop(bus))
 
-    # 启动主动循环
-    proactive_task = asyncio.create_task(run_proactive_loop(bus))
+    # 注：主动循环（ProactiveLoop）尚未完成，Step 4 再启用
+    # proactive_task = asyncio.create_task(run_proactive_loop(bus))
 
-    # 保持运行
     try:
-        await asyncio.gather(web_task, agent_task, proactive_task)
-    except KeyboardInterrupt:
+        await asyncio.gather(web_task, agent_task)
+    except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Shutting down...")
         agent_task.cancel()
-        proactive_task.cancel()
         web_task.cancel()
 
 

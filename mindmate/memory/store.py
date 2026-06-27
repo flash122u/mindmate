@@ -78,18 +78,20 @@ class MemoryStore:
         """初始化 SQLite 表结构."""
         cur = self._conn.cursor()
 
-        # 时间线日志
+        # 时间线日志（role: user / assistant / system）
         cur.execute("""
             CREATE TABLE IF NOT EXISTS history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                cursor INTEGER NOT NULL UNIQUE,
+                cursor INTEGER NOT NULL,
                 session_key TEXT NOT NULL DEFAULT 'default',
+                role TEXT NOT NULL DEFAULT 'user',
                 content TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                UNIQUE(session_key, cursor)
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session ON history(session_key, created_at)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_history_cursor ON history(cursor)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_history_cursor ON history(session_key, cursor)")
 
         # 情绪锚点
         cur.execute("""
@@ -136,19 +138,28 @@ class MemoryStore:
     # history — SQLite 时间线
     # ------------------------------------------------------------------
 
-    def append_history(self, content: str, session_key: str = "default") -> int:
-        """追加一条历史，返回 cursor."""
+    def append_history(
+        self, role: str, content: str, session_key: str = "default"
+    ) -> int:
+        """追加一条历史，返回 cursor.
+
+        role: user / assistant / system
+        """
         from datetime import datetime
 
+        if role not in ("user", "assistant", "system"):
+            raise ValueError(f"Invalid role: {role!r} (must be user/assistant/system)")
+
         cur = self._conn.cursor()
-        # 获取最大 cursor
+        # 获取该 session 的最大 cursor
         cur.execute("SELECT MAX(cursor) FROM history WHERE session_key = ?", (session_key,))
         row = cur.fetchone()
         cursor = (row[0] or 0) + 1
 
         cur.execute(
-            "INSERT INTO history (cursor, session_key, content, created_at) VALUES (?, ?, ?, ?)",
-            (cursor, session_key, content, datetime.now().isoformat()),
+            "INSERT INTO history (cursor, session_key, role, content, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cursor, session_key, role, content, datetime.now().isoformat()),
         )
         self._conn.commit()
         return cursor
@@ -156,30 +167,51 @@ class MemoryStore:
     def read_history(
         self, session_key: str = "default", limit: int = 100, offset: int = 0
     ) -> list[dict[str, Any]]:
-        """读取最近 N 条历史."""
+        """读取最近 N 条历史（时间正序）."""
         cur = self._conn.cursor()
         cur.execute(
-            "SELECT cursor, content, created_at FROM history "
+            "SELECT cursor, role, content, created_at FROM history "
             "WHERE session_key = ? ORDER BY cursor DESC LIMIT ? OFFSET ?",
             (session_key, limit, offset),
         )
         rows = cur.fetchall()
         # 反转成时间正序
         return [
-            {"cursor": r["cursor"], "content": r["content"], "created_at": r["created_at"]}
+            {
+                "cursor": r["cursor"],
+                "role": r["role"],
+                "content": r["content"],
+                "created_at": r["created_at"],
+            }
             for r in reversed(rows)
         ]
 
+    def read_history_as_messages(
+        self, session_key: str = "default", max_turns: int = 20
+    ) -> list[dict[str, str]]:
+        """读取最近历史，重建为标准多轮对话格式（role/content）.
+
+        这是让对话连贯的关键：返回真正的 user/assistant 交替消息列表，
+        而不是塞进 system prompt 的文本块。
+        """
+        entries = self.read_history(session_key, max_turns)
+        return [
+            {"role": e["role"], "content": e["content"]}
+            for e in entries
+            if e["role"] in ("user", "assistant")
+        ]
+
     def read_recent_for_prompt(self, session_key: str = "default", max_entries: int = 20) -> str:
-        """读取最近历史，格式化为 LLM 可理解的文本."""
+        """读取最近历史，格式化为文本（用于摘要/调试，非对话上下文）."""
         entries = self.read_history(session_key, max_entries)
         if not entries:
             return ""
         lines = []
         for e in entries:
-            cursor = e.get("cursor", "?")
+            role = e.get("role", "user")
             content = e.get("content", "")
-            lines.append(f"[{cursor}] {content}")
+            speaker = "我" if role == "assistant" else "对方"
+            lines.append(f"{speaker}: {content}")
         return "\n".join(lines)
 
     def read_all_history(self, session_key: str = "default") -> list[dict[str, Any]]:

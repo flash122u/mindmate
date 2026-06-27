@@ -102,9 +102,9 @@ class AgentLoop:
             temperature=0.7,
         )
 
-        # 3. 保存历史
-        self.memory.append_history(f"[{msg.sender_id}] {msg.content}", context.session_key)
-        self.memory.append_history(f"[Assistant] {response['content']}", context.session_key)
+        # 3. 保存历史（按 role 独立存储，支持多轮对话重建）
+        self.memory.append_history("user", msg.content, context.session_key)
+        self.memory.append_history("assistant", response["content"], context.session_key)
 
         # 4. 更新关系阶段（根据情感倾向）
         self.relationship.update(msg.content, context.session_key)
@@ -123,7 +123,7 @@ class AgentLoop:
         )
 
     async def _build_context(self, msg: InboundMessage) -> TurnContext:
-        """构建 LLM 上下文：SOUL + 关系 + 防御 + 近期历史 + 当前消息."""
+        """构建 LLM 上下文：system(人格/关系/防御) + 真实多轮对话 + 当前消息."""
         ctx = TurnContext(msg=msg)
 
         # 加载人格
@@ -136,10 +136,7 @@ class AgentLoop:
         # 关系状态
         relationship_prompt = self.relationship.build_relationship_prompt(ctx.session_key)
 
-        # 加载近期历史
-        recent = self.memory.read_recent_for_prompt(ctx.session_key, max_entries=20)
-
-        # 构建系统消息
+        # 构建 system 消息（人格 + 关系 + 防御，不含历史）
         system_parts = [
             "你是一个温暖的心理陪伴者，叫小暖。",
             "你关心对方的感受，不会急于给建议。",
@@ -150,19 +147,18 @@ class AgentLoop:
             f"## 你的身份\n{soul}",
             "",
             relationship_prompt,
-            "",
         ]
         if defense_prompt:
-            system_parts.extend([defense_prompt, ""])
-        system_parts.append("---")
-        system_parts.append("")
-        if recent:
-            system_parts.extend(["## 最近对话", recent])
-            system_parts.append("")
-            system_parts.append("---")
+            system_parts.extend(["", defense_prompt])
+
+        # 真实多轮对话历史（user/assistant 交替）——连贯性的关键
+        history_messages = self.memory.read_history_as_messages(
+            ctx.session_key, max_turns=20
+        )
 
         ctx.messages = [
             {"role": "system", "content": "\n".join(system_parts)},
+            *history_messages,
             {"role": "user", "content": msg.content},
         ]
 
