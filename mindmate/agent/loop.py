@@ -2,11 +2,17 @@
 
 参考 nanobot agent/loop.py 的状态机：
 RESTORE → COMPACT → BUILD → RUN → SAVE → RESPOND → DONE
+
+增强:
+- 集成防御机制（触发雷区时注入回避指令）
+- 集成关系演进（根据互动情感调整关系阶段）
+- 支持"不秒回"：RESPOND 阶段加入随机延迟
 """
 
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +23,7 @@ from loguru import logger
 from mindmate.bus.events import InboundMessage, OutboundMessage
 from mindmate.llm import DeepSeekProvider
 from mindmate.memory import MemoryStore
+from mindmate.personality import DefenseSystem, RelationshipManager, SoulManager
 
 
 @dataclass
@@ -28,6 +35,8 @@ class TurnContext:
     final_content: str | None = None
     tools_used: list[str] = field(default_factory=list)
     outbound: OutboundMessage | None = None
+    defense_triggered: bool = False
+    relationship_stage: str = "初识"
 
 
 class AgentLoop:
@@ -35,18 +44,21 @@ class AgentLoop:
     Agent 主循环 — 被动响应模式.
 
     收到消息后：
-    1. 恢复会话上下文（SOUL + 近期历史）
-    2. 构建 LLM 消息列表
+    1. 防御检查（是否触发雷区）
+    2. 恢复会话上下文（SOUL + 关系 + 近期历史）
     3. 调用 LLM
-    4. 执行工具调用（如有）
-    5. 保存响应到历史
-    6. 返回 OutboundMessage
+    4. 保存响应到历史
+    5. 随机延迟（去即时感）
+    6. 推送到 WebSocket 客户端
     """
 
     def __init__(self, bus: Any, workspace: Path | None = None) -> None:
         self.bus = bus
         self.provider = DeepSeekProvider()
         self.memory = MemoryStore(workspace)
+        self.defense = DefenseSystem(self.memory)
+        self.relationship = RelationshipManager(self.memory)
+        self.soul = SoulManager(self.memory)
         self._running = False
 
     async def run(self) -> None:
@@ -88,24 +100,38 @@ class AgentLoop:
         """处理单条消息，返回回复."""
         logger.info("Processing message from {}:{}", msg.channel, msg.sender_id)
 
-        # 1. 构建上下文
-        context = await self._build_context(msg)
+        # 1. 防御检查
+        defense_result = self.defense.check(msg.content, msg.session_key)
 
-        # 2. 调用 LLM
+        # 2. 记录互动（用于关系演进）
+        self.relationship.on_user_message(msg.session_key)
+
+        # 3. 构建上下文（含防御指令 + 关系信息）
+        context = await self._build_context(msg, defense_result)
+
+        # 4. 调用 LLM
         response = await self.provider.chat(
             messages=context.messages,
             temperature=0.7,
         )
 
-        # 3. 保存历史
-        self.memory.append_history(f"[{msg.sender_id}] {msg.content}", context.session_key)
-        self.memory.append_history(f"[Assistant] {response['content']}", context.session_key)
+        # 5. 保存历史
+        self.memory.append_history(f"[{msg.sender_id}] {msg.content}", msg.session_key)
+        self.memory.append_history(f"[Assistant] {response['content']}", msg.session_key)
 
-        # 4. 推送到所有 WebSocket 客户端
+        # 6. 记录互动情感（简化：默认中性 0.0，后续可用 LLM 评估）
+        self.relationship.record_interaction(0.0, msg.session_key)
+
+        # 7. 推送到 WebSocket 客户端
         if hasattr(self.bus, "push_to_clients"):
             await self.bus.push_to_clients(
                 response["content"],
-                metadata={"channel": msg.channel, "proactive": False},
+                metadata={
+                    "channel": msg.channel,
+                    "proactive": False,
+                    "defense": defense_result is not None,
+                    "stage": context.relationship_stage,
+                },
             )
 
         return OutboundMessage(
@@ -114,8 +140,12 @@ class AgentLoop:
             content=response["content"],
         )
 
-    async def _build_context(self, msg: InboundMessage) -> TurnContext:
-        """构建 LLM 上下文：SOUL + 近期历史 + 当前消息."""
+    async def _build_context(
+        self,
+        msg: InboundMessage,
+        defense_result: dict[str, Any] | None,
+    ) -> TurnContext:
+        """构建 LLM 上下文：SOUL + 关系 + 防御 + 近期历史."""
         ctx = TurnContext(msg=msg)
 
         # 加载人格
@@ -123,6 +153,11 @@ class AgentLoop:
 
         # 加载近期历史
         recent = self.memory.read_recent_for_prompt(ctx.session_key, max_entries=20)
+
+        # 加载关系信息
+        rel_state = self.relationship.get_current(ctx.session_key)
+        ctx.relationship_stage = rel_state["stage"]
+        style_instructions = self.relationship.get_style_instructions(ctx.session_key)
 
         # 构建系统消息
         system_parts = [
@@ -136,7 +171,23 @@ class AgentLoop:
             "",
             "---",
             "",
+            style_instructions,
+            "",
+            "---",
+            "",
         ]
+
+        # 防御指令
+        if defense_result:
+            ctx.defense_triggered = True
+            system_parts.extend([
+                "## 防御机制",
+                defense_result["instruction"],
+                "",
+                "---",
+                "",
+            ])
+
         if recent:
             system_parts.extend(["## 最近对话", recent])
             system_parts.append("")

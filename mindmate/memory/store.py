@@ -82,14 +82,12 @@ class MemoryStore:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                cursor INTEGER NOT NULL UNIQUE,
                 session_key TEXT NOT NULL DEFAULT 'default',
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session ON history(session_key, created_at)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_history_cursor ON history(cursor)")
 
         # 情绪锚点
         cur.execute("""
@@ -137,21 +135,16 @@ class MemoryStore:
     # ------------------------------------------------------------------
 
     def append_history(self, content: str, session_key: str = "default") -> int:
-        """追加一条历史，返回 cursor."""
+        """追加一条历史，返回自增 id."""
         from datetime import datetime
 
         cur = self._conn.cursor()
-        # 获取最大 cursor
-        cur.execute("SELECT MAX(cursor) FROM history WHERE session_key = ?", (session_key,))
-        row = cur.fetchone()
-        cursor = (row[0] or 0) + 1
-
         cur.execute(
-            "INSERT INTO history (cursor, session_key, content, created_at) VALUES (?, ?, ?, ?)",
-            (cursor, session_key, content, datetime.now().isoformat()),
+            "INSERT INTO history (session_key, content, created_at) VALUES (?, ?, ?)",
+            (session_key, content, datetime.now().isoformat()),
         )
         self._conn.commit()
-        return cursor
+        return cur.lastrowid
 
     def read_history(
         self, session_key: str = "default", limit: int = 100, offset: int = 0
@@ -159,14 +152,14 @@ class MemoryStore:
         """读取最近 N 条历史."""
         cur = self._conn.cursor()
         cur.execute(
-            "SELECT cursor, content, created_at FROM history "
-            "WHERE session_key = ? ORDER BY cursor DESC LIMIT ? OFFSET ?",
+            "SELECT id, content, created_at FROM history "
+            "WHERE session_key = ? ORDER BY id DESC LIMIT ? OFFSET ?",
             (session_key, limit, offset),
         )
         rows = cur.fetchall()
         # 反转成时间正序
         return [
-            {"cursor": r["cursor"], "content": r["content"], "created_at": r["created_at"]}
+            {"id": r["id"], "content": r["content"], "created_at": r["created_at"]}
             for r in reversed(rows)
         ]
 
@@ -177,9 +170,9 @@ class MemoryStore:
             return ""
         lines = []
         for e in entries:
-            cursor = e.get("cursor", "?")
+            entry_id = e.get("id", "?")
             content = e.get("content", "")
-            lines.append(f"[{cursor}] {content}")
+            lines.append(f"[{entry_id}] {content}")
         return "\n".join(lines)
 
     def read_all_history(self, session_key: str = "default") -> list[dict[str, Any]]:
