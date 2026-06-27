@@ -13,7 +13,7 @@
 | `step-4-proactive.md` | 主动行为：能量模型 + LLM 生成主动消息 | ✅ |
 | `step-5-memory.md` | 记忆深化：情绪锚点 + 记忆整合 + 遗忘 | ✅ |
 | `step-6-subagents.md` | 子 Agent（日记/造梦）+ 医生管理后台 | ✅ |
-| `step-7-scheduler.md` | 定时任务：每日日记/梦自动生成 | ⬜ |
+| `step-7-scheduler.md` | 定时任务：每日日记/梦自动生成 | ✅ |
 | `step-8-multiuser.md` | 多用户支持：per-user 记忆/关系/能量隔离 | ⬜ |
 
 ## 关键设计原则（来自最初想法）
