@@ -23,12 +23,9 @@ def create_app(bus: Any) -> FastAPI:
     # 全局 WebSocket 客户端列表
     clients: set[WebSocket] = set()
 
-    async def _broadcast(content: str, metadata: dict | None = None) -> None:
-        """把一条消息推送给所有连接的客户端."""
-        payload = json.dumps(
-            {"type": "message", "content": content, "metadata": metadata or {}},
-            ensure_ascii=False,
-        )
+    async def _broadcast(payload_obj: dict) -> None:
+        """把一条事件推送给所有连接的客户端."""
+        payload = json.dumps(payload_obj, ensure_ascii=False)
         dead = []
         for client in clients:
             try:
@@ -39,11 +36,19 @@ def create_app(bus: Any) -> FastAPI:
             clients.discard(c)
 
     async def _outbound_consumer() -> None:
-        """后台任务：消费 outbound 总线，把回复投递给 Web 客户端."""
+        """后台任务：消费 outbound 总线，把回复/输入信号投递给 Web 客户端."""
         while True:
             try:
                 msg = await bus.consume_outbound()
-                await _broadcast(msg.content, msg.metadata)
+                meta = msg.metadata or {}
+                event = meta.get("event", "message")
+                if event == "typing":
+                    # "正在输入"信号，无正文
+                    await _broadcast({"type": "typing", "metadata": meta})
+                else:
+                    await _broadcast(
+                        {"type": "message", "content": msg.content, "metadata": meta}
+                    )
             except asyncio.CancelledError:
                 break
             except Exception:

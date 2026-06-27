@@ -66,7 +66,15 @@ function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.onmessage = (e) => {
-    addMsg(e.data, 'assistant');
+    let data;
+    try { data = JSON.parse(e.data); } catch { data = { type: 'message', content: e.data }; }
+    if (data.type === 'typing') {
+      showTyping();
+    } else if (data.type === 'message') {
+      hideTyping();
+      if (data.content) addMsg(data.content, 'assistant');
+      btnEl.disabled = false;
+    }
   };
   ws.onclose = () => { setTimeout(connect, 3000); };
 }
@@ -98,22 +106,15 @@ function send() {
   if (!text) return;
   addMsg(text, 'user');
   inputEl.value = '';
-  showTyping();
   btnEl.disabled = true;
 
-  // 通过 WebSocket 发送
+  // 通过 WebSocket 发送，回复由后端逐条推送（typing / message 事件驱动）
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(text);
-  }
-
-  // 模拟延迟（去即时感）
-  const delay = 3000 + Math.random() * 9000;
-  setTimeout(() => {
-    hideTyping();
+  } else {
+    addMsg('(连接断开，正在重连…)', 'system');
     btnEl.disabled = false;
-    // 模拟回复（实际应由后端推送）
-    addMsg('(等待小暖回复...)', 'system');
-  }, delay);
+  }
 }
 
 btnEl.addEventListener('click', send);
