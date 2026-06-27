@@ -18,10 +18,13 @@ from mindmate.bus.events import InboundMessage, OutboundMessage
 from mindmate.llm import DeepSeekProvider
 from mindmate.memory import MemoryStore
 from mindmate.personality.defense import DefenseMechanism
+from mindmate.personality.diary import DiaryAgent
+from mindmate.personality.dream import DreamAgent
 from mindmate.personality.emotion_anchor import EmotionAnchorManager
 from mindmate.personality.forget import ForgetAgent
 from mindmate.personality.memory_consolidator import MemoryConsolidator
 from mindmate.personality.relationship import RelationshipManager
+from mindmate.tools.crisis_detect import CrisisDetector
 from mindmate.utils.splitter import split_message, think_delay, typing_delay
 
 
@@ -93,6 +96,13 @@ class AgentLoop:
         self.anchors = EmotionAnchorManager(self.memory, self.provider)
         self.consolidator = MemoryConsolidator(self.memory, self.provider)
         self.forget = ForgetAgent(self.memory)
+        # 私密内在生活：日记 + 梦
+        self.diary = DiaryAgent(self.memory, self.provider)
+        self.dream = DreamAgent(self.memory, self.provider)
+        # 吐露私密的概率（仅在关系深 + 强情绪共鸣时才考虑）
+        self.share_prob = 0.3
+        # 风险检测
+        self.crisis = CrisisDetector(self.memory)
         # 能量模型（主动行为调度）；与 ProactiveLoop 共享同一实例
         self.energy = energy
         # 是否在对话后做记忆维护（提取锚点/整合/遗忘），测试时可关闭
@@ -290,6 +300,10 @@ class AgentLoop:
         defense_result = self.defense.check(msg.content, ctx.session_key)
         defense_prompt = self.defense.build_defense_prompt(defense_result)
 
+        # 风险检测（命中则记录预警 + 注入关切指引）
+        crisis_result = self.crisis.check_and_record(msg.content, ctx.session_key)
+        care_prompt = self.crisis.build_care_prompt(crisis_result)
+
         # 关系状态
         relationship_prompt = self.relationship.build_relationship_prompt(ctx.session_key)
 
@@ -299,6 +313,9 @@ class AgentLoop:
         # 召回被当前消息触发的情绪锚点
         recalled = self.anchors.recall(msg.content, ctx.session_key)
         anchor_prompt = self.anchors.build_anchor_prompt(recalled)
+
+        # 分享冲动：交心时刻才考虑吐露一点私密的日记/梦
+        share_prompt = self._maybe_share_inner_life(ctx.session_key, recalled)
 
         # 构建 system 消息（人格 + 关系 + 长期记忆 + 情绪锚点 + 防御 + 风格 + few-shot）
         system_parts = [
@@ -310,7 +327,11 @@ class AgentLoop:
             system_parts.extend(["", f"## 你记得的一些事\n{long_term}"])
         if anchor_prompt:
             system_parts.extend(["", anchor_prompt])
+        if share_prompt:
+            system_parts.extend(["", share_prompt])
         system_parts.extend(["", self._STYLE_RULES, "", self._FEWSHOT])
+        if care_prompt:
+            system_parts.extend(["", care_prompt])
         if defense_prompt:
             system_parts.extend(["", defense_prompt])
 
@@ -326,3 +347,47 @@ class AgentLoop:
         ]
 
         return ctx
+
+    def _maybe_share_inner_life(
+        self, session_key: str, recalled: list[dict[str, Any]]
+    ) -> str:
+        """交心时刻才考虑吐露一点私密的日记/梦.
+
+        条件（避免过度暴露）：
+        - 关系已到「朋友」或「信赖」
+        - 且（此刻有强情绪共鸣 或 概率命中）
+        命中后取一条未分享的日记/梦，提示 LLM 含蓄吐露一点点，并标记已分享。
+        """
+        stage = self.relationship.get_state(session_key).stage
+        if stage == "初识":
+            return ""
+
+        strong_resonance = any(abs(a.get("valence", 0.0)) >= 0.6 for a in recalled)
+        deep = stage == "信赖"
+        if not (strong_resonance or deep):
+            return ""
+        if random.random() > self.share_prob:
+            return ""
+
+        # 优先吐露梦（更私密），其次日记；取最近一条未分享的
+        for kind, getter, marker in (
+            ("梦", self.memory.get_dreams, self.memory.mark_dream_shared),
+            ("日记", self.memory.get_diaries, self.memory.mark_diary_shared),
+        ):
+            items = [i for i in getter(session_key, limit=10) if not i.get("shared")]
+            if items:
+                item = items[0]
+                marker(item["id"])
+                return (
+                    f"## 此刻的一点私心（内部）\n"
+                    f"你心里浮起一件没跟人说过的私密的事（你的{kind}）：「{item['content']}」。"
+                    "如果此刻你们聊得很交心、气氛合适，你可以**不经意地、含蓄地**"
+                    "用'其实…'开头提一点点，只露一句，别和盘托出，也别解释太多。"
+                    "如果气氛不对，就不提。"
+                )
+        return ""
+
+    async def run_daily_inner_life(self, session_key: str = "default") -> None:
+        """生成当天的私密日记 + 梦（由调度器每日调用，不投递给用户）."""
+        await self.diary.write_today(session_key)
+        await self.dream.dream(session_key)

@@ -2,67 +2,140 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MindMate — 医生管理后台</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; }
-  nav { background: #fff; padding: 12px 24px; border-bottom: 1px solid #e0e0e0; display: flex; gap: 24px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; color: #333; }
+  nav { background: #fff; padding: 12px 24px; border-bottom: 1px solid #e0e0e0; display: flex; gap: 24px; align-items: center; }
+  nav .logo { font-weight: 600; color: #07c160; }
   nav a { text-decoration: none; color: #666; font-size: 14px; padding: 8px 0; border-bottom: 2px solid transparent; }
   nav a.active { color: #07c160; border-bottom-color: #07c160; }
-  .container { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+  .container { max-width: 980px; margin: 24px auto; padding: 0 16px; }
   .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  .card h2 { font-size: 16px; margin-bottom: 12px; color: #333; }
-  .stat { display: flex; gap: 32px; }
-  .stat-item { text-align: center; }
-  .stat-item .num { font-size: 28px; font-weight: 600; color: #07c160; }
+  .card h2 { font-size: 15px; margin-bottom: 14px; color: #333; }
+  .stat { display: flex; gap: 36px; flex-wrap: wrap; }
+  .stat-item .num { font-size: 26px; font-weight: 600; color: #07c160; }
+  .stat-item .num.warn { color: #e65100; }
+  .stat-item .num.danger { color: #c62828; }
   .stat-item .label { font-size: 12px; color: #999; margin-top: 4px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #eee; color: #999; font-weight: 500; }
-  td { padding: 8px 12px; border-bottom: 1px solid #f0f0f0; color: #555; }
+  th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #eee; color: #999; font-weight: 500; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; color: #555; vertical-align: top; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
-  .badge.warn { background: #fff3e0; color: #e65100; }
-  .badge.ok { background: #e8f5e9; color: #2e7d32; }
-  .badge.high { background: #ffebee; color: #c62828; }
+  .badge.low { background: #fff8e1; color: #f57f17; }
+  .badge.medium { background: #fff3e0; color: #e65100; }
+  .badge.high { background: #ffebee; color: #c62828; font-weight: 600; }
+  .empty { color: #ccc; text-align: center; padding: 16px; }
+  #trend { width: 100%; height: 160px; }
+  .msg-user { color: #07c160; }
+  .msg-assistant { color: #555; }
+  .refresh { margin-left: auto; font-size: 12px; color: #999; cursor: pointer; }
 </style>
 </head>
 <body>
 <nav>
-  <a href="/" class="active">概览</a>
+  <span class="logo">🌿 MindMate</span>
+  <a href="/dashboard" class="active">医生后台</a>
   <a href="/chat">聊天</a>
-  <a href="#" onclick="alert('待实现')">情绪趋势</a>
-  <a href="#" onclick="alert('待实现')">对话记录</a>
+  <span class="refresh" onclick="loadAll()">↻ 刷新</span>
 </nav>
 
 <div class="container">
   <div class="card">
     <h2>概览</h2>
-    <div class="stat">
-      <div class="stat-item"><div class="num">—</div><div class="label">今日对话</div></div>
-      <div class="stat-item"><div class="num">—</div><div class="label">平均情绪</div></div>
-      <div class="stat-item"><div class="num">0</div><div class="label">风险预警</div></div>
-      <div class="stat-item"><div class="num">—</div><div class="label">关系阶段</div></div>
+    <div class="stat" id="overview">
+      <div class="empty">加载中…</div>
     </div>
   </div>
 
   <div class="card">
-    <h2>最近对话</h2>
+    <h2>情绪趋势（情绪锚点 valence 时间序列）</h2>
+    <svg id="trend" viewBox="0 0 900 160" preserveAspectRatio="none"></svg>
+    <div id="trend-empty" class="empty" style="display:none">暂无情绪数据</div>
+  </div>
+
+  <div class="card">
+    <h2>⚠️ 风险预警</h2>
     <table>
-      <thead><tr><th>时间</th><th>内容摘要</th><th>情绪</th></tr></thead>
-      <tbody>
-        <tr><td colspan="3" style="color:#ccc;text-align:center;">暂无数据</td></tr>
-      </tbody>
+      <thead><tr><th style="width:70px">等级</th><th style="width:140px">时间</th><th>触发内容</th></tr></thead>
+      <tbody id="alerts"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
     </table>
   </div>
 
   <div class="card">
-    <h2>风险预警</h2>
+    <h2>对话回放</h2>
     <table>
-      <thead><tr><th>等级</th><th>时间</th><th>内容</th></tr></thead>
-      <tbody>
-        <tr><td colspan="3" style="color:#ccc;text-align:center;">暂无预警</td></tr>
-      </tbody>
+      <thead><tr><th style="width:60px">角色</th><th style="width:140px">时间</th><th>内容</th></tr></thead>
+      <tbody id="history"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
     </table>
   </div>
 </div>
+
+<script>
+const fmt = (iso) => iso ? iso.replace('T', ' ').slice(0, 16) : '';
+
+async function loadOverview() {
+  const d = await (await fetch('/api/dashboard/overview')).json();
+  const cls = d.high_alert_count > 0 ? 'danger' : (d.alert_count > 0 ? 'warn' : '');
+  document.getElementById('overview').innerHTML = `
+    <div class="stat-item"><div class="num">${d.turn_count}</div><div class="label">对话条数</div></div>
+    <div class="stat-item"><div class="num">${d.stage}</div><div class="label">关系阶段</div></div>
+    <div class="stat-item"><div class="num">${d.avg_valence}</div><div class="label">平均情绪 (-1~1)</div></div>
+    <div class="stat-item"><div class="num">${d.anchor_count}</div><div class="label">情绪锚点</div></div>
+    <div class="stat-item"><div class="num ${cls}">${d.alert_count}</div><div class="label">风险预警 (高危 ${d.high_alert_count})</div></div>
+  `;
+}
+
+async function loadTrends() {
+  const d = await (await fetch('/api/dashboard/trends')).json();
+  const pts = d.points || [];
+  const svg = document.getElementById('trend');
+  const emptyEl = document.getElementById('trend-empty');
+  if (pts.length < 2) { svg.style.display='none'; emptyEl.style.display='block'; return; }
+  svg.style.display='block'; emptyEl.style.display='none';
+  const W = 900, H = 160, pad = 10;
+  const n = pts.length;
+  const x = (i) => pad + (W - 2*pad) * i / (n - 1);
+  const y = (v) => H/2 - v * (H/2 - pad);  // valence -1..1 → 底..顶
+  let path = '';
+  pts.forEach((p, i) => { path += (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(p.valence).toFixed(1) + ' '; });
+  const dots = pts.map((p, i) => {
+    const color = p.valence >= 0 ? '#07c160' : '#e57373';
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.valence).toFixed(1)}" r="3" fill="${color}"><title>${p.emotion}: ${p.valence}</title></circle>`;
+  }).join('');
+  svg.innerHTML = `
+    <line x1="0" y1="${H/2}" x2="${W}" y2="${H/2}" stroke="#eee" stroke-width="1"/>
+    <path d="${path}" fill="none" stroke="#07c160" stroke-width="2"/>
+    ${dots}`;
+}
+
+async function loadAlerts() {
+  const d = await (await fetch('/api/dashboard/alerts')).json();
+  const tb = document.getElementById('alerts');
+  if (!d.alerts.length) { tb.innerHTML = '<tr><td colspan="3" class="empty">暂无预警，一切平稳</td></tr>'; return; }
+  tb.innerHTML = d.alerts.map(a => `
+    <tr><td><span class="badge ${a.level}">${a.level}</span></td>
+    <td>${fmt(a.created_at)}</td><td>${a.message}</td></tr>`).join('');
+}
+
+async function loadHistory() {
+  const d = await (await fetch('/api/dashboard/history?limit=60')).json();
+  const tb = document.getElementById('history');
+  if (!d.history.length) { tb.innerHTML = '<tr><td colspan="3" class="empty">暂无对话</td></tr>'; return; }
+  tb.innerHTML = d.history.map(h => {
+    const who = h.role === 'assistant' ? '小暖' : '用户';
+    const cls = h.role === 'assistant' ? 'msg-assistant' : 'msg-user';
+    return `<tr><td class="${cls}">${who}</td><td>${fmt(h.created_at)}</td><td>${h.content}</td></tr>`;
+  }).join('');
+}
+
+async function loadAll() {
+  try { await Promise.all([loadOverview(), loadTrends(), loadAlerts(), loadHistory()]); }
+  catch (e) { console.error(e); }
+}
+loadAll();
+setInterval(loadAll, 15000);
+</script>
 </body>
 </html>

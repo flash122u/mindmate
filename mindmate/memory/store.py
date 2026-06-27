@@ -136,6 +136,46 @@ class MemoryStore:
             )
         """)
 
+        # 私密日记（小暖的内在生活，默认不进对话上下文）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS diary (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_key TEXT NOT NULL DEFAULT 'default',
+                content TEXT NOT NULL,
+                mood TEXT,
+                shared INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # 私密梦境
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS dreams (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_key TEXT NOT NULL DEFAULT 'default',
+                content TEXT NOT NULL,
+                tone TEXT,
+                shared INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # 风险预警（医生后台）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS crisis_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_key TEXT NOT NULL DEFAULT 'default',
+                level TEXT NOT NULL,
+                signal TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_session "
+            "ON crisis_alerts(session_key, created_at)"
+        )
+
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -338,6 +378,119 @@ class MemoryStore:
     def get_stage_index(self, stage: str) -> int:
         """获取阶段索引（用于比较深浅）."""
         return self.STAGES.index(stage)
+
+    # ------------------------------------------------------------------
+    # 私密日记（小暖的内在生活）
+    # ------------------------------------------------------------------
+
+    def add_diary(
+        self, content: str, mood: str | None = None, session_key: str = "default"
+    ) -> int:
+        """写一条私密日记."""
+        from datetime import datetime
+
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO diary (session_key, content, mood, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (session_key, content, mood, datetime.now().isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_diaries(
+        self, session_key: str = "default", limit: int = 30
+    ) -> list[dict[str, Any]]:
+        """读取私密日记（仅内部使用，不进对话上下文）."""
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, content, mood, shared, created_at FROM diary "
+            "WHERE session_key = ? ORDER BY id DESC LIMIT ?",
+            (session_key, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def mark_diary_shared(self, diary_id: int) -> None:
+        cur = self._conn.cursor()
+        cur.execute("UPDATE diary SET shared = 1 WHERE id = ?", (diary_id,))
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # 私密梦境
+    # ------------------------------------------------------------------
+
+    def add_dream(
+        self, content: str, tone: str | None = None, session_key: str = "default"
+    ) -> int:
+        """记录一个梦境."""
+        from datetime import datetime
+
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO dreams (session_key, content, tone, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (session_key, content, tone, datetime.now().isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_dreams(
+        self, session_key: str = "default", limit: int = 30
+    ) -> list[dict[str, Any]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT id, content, tone, shared, created_at FROM dreams "
+            "WHERE session_key = ? ORDER BY id DESC LIMIT ?",
+            (session_key, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def mark_dream_shared(self, dream_id: int) -> None:
+        cur = self._conn.cursor()
+        cur.execute("UPDATE dreams SET shared = 1 WHERE id = ?", (dream_id,))
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # 风险预警（医生后台）
+    # ------------------------------------------------------------------
+
+    def add_crisis_alert(
+        self, level: str, signal: str, message: str, session_key: str = "default"
+    ) -> int:
+        """记录一条风险预警."""
+        from datetime import datetime
+
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT INTO crisis_alerts (session_key, level, signal, message, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (session_key, level, signal, message, datetime.now().isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_crisis_alerts(
+        self, session_key: str = "default", limit: int = 50
+    ) -> list[dict[str, Any]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT level, signal, message, created_at FROM crisis_alerts "
+            "WHERE session_key = ? ORDER BY id DESC LIMIT ?",
+            (session_key, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_emotion_trend(
+        self, session_key: str = "default", limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """情绪锚点的时间序列（valence over time），用于趋势图."""
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT event, emotion, valence, created_at FROM emotion_anchors "
+            "WHERE session_key = ? ORDER BY id ASC LIMIT ?",
+            (session_key, limit),
+        )
+        return [dict(r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------
     # 清理

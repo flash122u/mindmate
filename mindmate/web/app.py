@@ -97,6 +97,43 @@ def create_app(bus: Any) -> FastAPI:
         )
         return {"status": "sent"}
 
+    # ------------------------------------------------------------------
+    # 医生后台 API（只读，共享同一 SQLite）
+    # ------------------------------------------------------------------
+    from mindmate.memory import MemoryStore
+
+    store = MemoryStore()
+
+    @app.get("/api/dashboard/overview")
+    async def dashboard_overview(session_key: str = "default"):
+        rel = store.get_relationship(session_key)
+        anchors = store.get_emotion_anchors(session_key, limit=1000)
+        alerts = store.get_crisis_alerts(session_key, limit=1000)
+        history = store.read_history(session_key, limit=100000)
+        avg_valence = (
+            sum(a["valence"] for a in anchors) / len(anchors) if anchors else 0.0
+        )
+        return {
+            "stage": rel["stage"],
+            "anchor_count": len(anchors),
+            "alert_count": len(alerts),
+            "high_alert_count": sum(1 for a in alerts if a["level"] == "high"),
+            "turn_count": len(history),
+            "avg_valence": round(avg_valence, 2),
+        }
+
+    @app.get("/api/dashboard/trends")
+    async def dashboard_trends(session_key: str = "default"):
+        return {"points": store.get_emotion_trend(session_key, limit=200)}
+
+    @app.get("/api/dashboard/alerts")
+    async def dashboard_alerts(session_key: str = "default"):
+        return {"alerts": store.get_crisis_alerts(session_key, limit=100)}
+
+    @app.get("/api/dashboard/history")
+    async def dashboard_history(session_key: str = "default", limit: int = 100):
+        return {"history": store.read_history(session_key, limit=limit)}
+
     # WebSocket: 双向实时通信
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

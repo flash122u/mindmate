@@ -1,6 +1,8 @@
-"""Personality 模块 — 人格系统 + 防御 + 关系 + 情绪锚点 + 记忆."""
+"""Personality 模块 — 人格 + 防御 + 关系 + 情绪锚点 + 记忆 + 内在生活."""
 
 from .defense import DefenseMechanism
+from .diary import DiaryAgent
+from .dream import DreamAgent
 from .emotion_anchor import EmotionAnchorManager
 from .forget import ForgetAgent
 from .memory_consolidator import MemoryConsolidator
@@ -14,4 +16,6 @@ __all__ = [
     "EmotionAnchorManager",
     "MemoryConsolidator",
     "ForgetAgent",
+    "DiaryAgent",
+    "DreamAgent",
 ]
