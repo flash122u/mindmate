@@ -1,15 +1,21 @@
-"""Personality 模块 — 人格系统."""
+"""人格系统 — 人格核心 + 防御机制 + 关系演进 + 情绪锚点 + 子Agent."""
 
+from .defense import DefenseSystem
+from .diary import DiaryAgent
+from .dream import DreamAgent
+from .emotion_anchor import EmotionAnchorManager
+from .forget import ForgetAgent
+from .memory_consolidator import MemoryConsolidator
+from .relationship import RelationshipManager
 from .soul import SoulManager
-from .defense import DefenseMechanism, DefenseResult, DefenseStrategy, TabooRule
-from .relationship import RelationshipManager, RelationshipState
 
 __all__ = [
     "SoulManager",
-    "DefenseMechanism",
-    "DefenseResult",
-    "DefenseStrategy",
-    "TabooRule",
+    "DefenseSystem",
     "RelationshipManager",
-    "RelationshipState",
+    "EmotionAnchorManager",
+    "MemoryConsolidator",
+    "DiaryAgent",
+    "DreamAgent",
+    "ForgetAgent",
 ]

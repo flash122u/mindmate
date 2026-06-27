@@ -7,30 +7,22 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
-
-  /* 顶栏 */
   header { background: #fff; padding: 12px 20px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; gap: 12px; }
   header .avatar { width: 36px; height: 36px; border-radius: 50%; background: #e8f5e9; display: flex; align-items: center; justify-content: center; font-size: 18px; }
   header .info h1 { font-size: 15px; color: #333; }
   header .info .status { font-size: 12px; color: #999; }
   header .info .status.online { color: #4caf50; }
-
-  /* 聊天区 */
   #chat { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
   .msg { max-width: 70%; padding: 10px 14px; border-radius: 16px; font-size: 14px; line-height: 1.5; word-break: break-word; }
   .msg.user { align-self: flex-end; background: #07c160; color: #fff; border-bottom-right-radius: 4px; }
   .msg.assistant { align-self: flex-start; background: #fff; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
   .msg.system { align-self: center; background: #f0f0f0; color: #999; font-size: 12px; padding: 6px 12px; border-radius: 10px; }
-
-  /* 输入区 */
   #input-bar { background: #fff; padding: 12px 20px; border-top: 1px solid #e0e0e0; display: flex; gap: 10px; }
   #input-bar input { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 20px; outline: none; font-size: 14px; }
   #input-bar input:focus { border-color: #07c160; }
   #input-bar button { padding: 10px 20px; background: #07c160; color: #fff; border: none; border-radius: 20px; font-size: 14px; cursor: pointer; }
   #input-bar button:hover { background: #06ad56; }
   #input-bar button:disabled { background: #ccc; cursor: not-allowed; }
-
-  /* 输入中动画 */
   .typing { display: flex; gap: 4px; padding: 10px 14px; align-self: flex-start; background: #fff; border-radius: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
   .typing span { width: 8px; height: 8px; background: #bbb; border-radius: 50%; animation: bounce 1.4s infinite ease-in-out; }
   .typing span:nth-child(1) { animation-delay: -0.32s; }
@@ -60,16 +52,56 @@ const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('msg-input');
 const btnEl = document.getElementById('send-btn');
 
-// 连接 WebSocket
 let ws = null;
+let reconnectTimer = null;
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onmessage = (e) => {
-    addMsg(e.data, 'assistant');
+  const url = `${proto}//${location.host}/ws`;
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    console.log('WebSocket connected');
+    document.querySelector('.status').textContent = '● 在线';
+    document.querySelector('.status').className = 'status online';
   };
-  ws.onclose = () => { setTimeout(connect, 3000); };
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'message') {
+        hideTyping();
+        if (data.metadata && data.metadata.segment) {
+          // 分段消息：追加到上一条助理气泡
+          const lastMsg = chatEl.lastElementChild;
+          if (lastMsg && lastMsg.classList.contains('assistant') && !data.metadata.is_last) {
+            addTextToLastMsg(' ' + data.content);
+          } else if (lastMsg && lastMsg.classList.contains('assistant') && data.metadata.is_last) {
+            addTextToLastMsg(' ' + data.content);
+            btnEl.disabled = false;
+          } else {
+            addMsg(data.content, 'assistant');
+            if (data.metadata.is_last) btnEl.disabled = false;
+          }
+        } else {
+          addMsg(data.content, 'assistant');
+          btnEl.disabled = false;
+        }
+      }
+    } catch {
+      addMsg(e.data, 'assistant');
+      hideTyping();
+      btnEl.disabled = false;
+    }
+  };
+
+  ws.onclose = () => {
+    document.querySelector('.status').textContent = '● 连接断开';
+    document.querySelector('.status').className = 'status';
+    reconnectTimer = setTimeout(connect, 3000);
+  };
 }
+
 connect();
 
 function addMsg(text, role) {
@@ -80,7 +112,16 @@ function addMsg(text, role) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
+function addTextToLastMsg(text) {
+  const lastMsg = chatEl.lastElementChild;
+  if (lastMsg && lastMsg.classList.contains('assistant')) {
+    lastMsg.textContent += text;
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+}
+
 function showTyping() {
+  if (document.getElementById('typing-indicator')) return;
   const div = document.createElement('div');
   div.className = 'typing';
   div.id = 'typing-indicator';
@@ -101,19 +142,20 @@ function send() {
   showTyping();
   btnEl.disabled = true;
 
-  // 通过 WebSocket 发送
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(text);
+  } else {
+    // 降级: 通过 REST API
+    fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'content=' + encodeURIComponent(text),
+    }).catch(() => {
+      hideTyping();
+      btnEl.disabled = false;
+      addMsg('连接失败，请稍后再试', 'system');
+    });
   }
-
-  // 模拟延迟（去即时感）
-  const delay = 3000 + Math.random() * 9000;
-  setTimeout(() => {
-    hideTyping();
-    btnEl.disabled = false;
-    // 模拟回复（实际应由后端推送）
-    addMsg('(等待小暖回复...)', 'system');
-  }, delay);
 }
 
 btnEl.addEventListener('click', send);

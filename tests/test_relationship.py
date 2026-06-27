@@ -1,95 +1,83 @@
-"""测试关系阶段管理."""
+"""测试关系管理系统."""
 
 import sys
-sys.path.insert(0, '.')
+sys.path.insert(0, '..')
 
 from mindmate.memory import MemoryStore
-from mindmate.personality.relationship import RelationshipManager
+from mindmate.personality import RelationshipManager
 
 
-def test_initial_stage():
-    mem = MemoryStore()
+def test_relationship_initial():
+    store = MemoryStore()
     try:
-        rm = RelationshipManager(mem)
-        state = rm.get_state("rel_t1")
-        assert state.stage == "初识"
+        rel = RelationshipManager(store)
+        state = rel.get_current("rel_test")
+        assert state["stage"] == "初识"
+        assert state["style"]["tone"] == "礼貌、稍显拘谨"
     finally:
-        mem.close()
+        store.close()
 
 
-def test_score_positive_message():
-    mem = MemoryStore()
+def test_relationship_style_instructions():
+    store = MemoryStore()
     try:
-        rm = RelationshipManager(mem)
-        score = rm.score_message("谢谢你，你真的很懂我")
-        assert score > 0
+        rel = RelationshipManager(store)
+        instructions = rel.get_style_instructions("rel_style")
+        assert "初识" in instructions
+        assert "礼貌" in instructions
     finally:
-        mem.close()
+        store.close()
 
 
-def test_score_negative_message():
-    mem = MemoryStore()
+def test_relationship_advance():
+    """推进需要至少 3 条历史 + 正向互动."""
+    store = MemoryStore()
     try:
-        rm = RelationshipManager(mem)
-        score = rm.score_message("你好烦，闭嘴")
-        assert score < 0
+        rel = RelationshipManager(store)
+        # 先写 3 条历史（模拟互动）
+        store.append_history("[user] 今天心情不错", "rel_adv")
+        store.append_history("[Assistant] 太好了，什么事让你开心？", "rel_adv")
+        store.append_history("[user] 和朋友吃了顿好吃的", "rel_adv")
+
+        # 记录正向互动
+        rel.record_interaction(0.7, "rel_adv")
+        rel.record_interaction(0.6, "rel_adv")
+
+        state = rel.get_current("rel_adv")
+        assert state["stage"] == "朋友"
     finally:
-        mem.close()
+        store.close()
 
 
-def test_relationship_evolves_to_friend():
-    mem = MemoryStore()
+def test_relationship_not_advance_without_history():
+    """没有历史的情况下不应该推进."""
+    store = MemoryStore()
     try:
-        rm = RelationshipManager(mem)
-        # 持续正面互动推进关系
-        for _ in range(15):
-            rm.update("谢谢你，好喜欢和你聊天，好开心", "rel_t2")
-        state = rm.get_state("rel_t2")
-        assert state.stage in ("朋友", "信赖")
+        rel = RelationshipManager(store)
+        rel.record_interaction(0.8, "rel_no_hist")
+        rel.record_interaction(0.7, "rel_no_hist")
+        state = rel.get_current("rel_no_hist")
+        assert state["stage"] == "初识"
     finally:
-        mem.close()
+        store.close()
 
 
-def test_relationship_score_floor():
-    mem = MemoryStore()
+def test_relationship_retreat():
+    """强负向互动可以退步."""
+    store = MemoryStore()
     try:
-        rm = RelationshipManager(mem)
-        # 大量负面也不会低于 0
-        for _ in range(10):
-            rm.update("讨厌，滚开", "rel_t3")
-        state = rm.get_state("rel_t3")
-        assert state.score >= 0
+        rel = RelationshipManager(store)
+        # 先推进
+        store.append_history("[user] 你好", "rel_ret")
+        store.append_history("[Assistant] 嗨", "rel_ret")
+        store.append_history("[user] 今天很好", "rel_ret")
+        rel.record_interaction(0.8, "rel_ret")
+        rel.record_interaction(0.7, "rel_ret")
+        assert rel.get_current("rel_ret")["stage"] == "朋友"
+
+        # 强负向 → 退回
+        rel.record_interaction(-0.6, "rel_ret")
+        state = rel.get_current("rel_ret")
+        assert state["stage"] == "初识"
     finally:
-        mem.close()
-
-
-def test_build_relationship_prompt():
-    mem = MemoryStore()
-    try:
-        rm = RelationshipManager(mem)
-        prompt = rm.build_relationship_prompt("rel_t4")
-        assert "关系" in prompt
-        assert "初识" in prompt
-    finally:
-        mem.close()
-
-
-def test_stage_for_score():
-    mem = MemoryStore()
-    try:
-        rm = RelationshipManager(mem)
-        assert rm._stage_for_score(0) == "初识"
-        assert rm._stage_for_score(25) == "朋友"
-        assert rm._stage_for_score(70) == "信赖"
-    finally:
-        mem.close()
-
-
-def test_normal_message_grows_familiarity():
-    mem = MemoryStore()
-    try:
-        rm = RelationshipManager(mem)
-        score = rm.score_message("今天去上班了")
-        assert score >= 1  # 普通对话也有微小增长
-    finally:
-        mem.close()
+        store.close()
