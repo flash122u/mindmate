@@ -2,45 +2,84 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from loguru import logger
 
 from mindmate.bus.events import InboundMessage
-
 
 APP_DIR = Path(__file__).parent
 
 
 def create_app(bus: Any) -> FastAPI:
     """创建 FastAPI 应用."""
-    app = FastAPI(title="MindMate", version="0.1.0")
-
     # 全局 WebSocket 客户端列表
-    _clients: list[WebSocket] = []
+    clients: set[WebSocket] = set()
+
+    async def _broadcast(content: str, metadata: dict | None = None) -> None:
+        """把一条消息推送给所有连接的客户端."""
+        payload = json.dumps(
+            {"type": "message", "content": content, "metadata": metadata or {}},
+            ensure_ascii=False,
+        )
+        dead = []
+        for client in clients:
+            try:
+                await client.send_text(payload)
+            except Exception:
+                dead.append(client)
+        for c in dead:
+            clients.discard(c)
+
+    async def _outbound_consumer() -> None:
+        """后台任务：消费 outbound 总线，把回复投递给 Web 客户端."""
+        while True:
+            try:
+                msg = await bus.consume_outbound()
+                await _broadcast(msg.content, msg.metadata)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("Error in outbound consumer")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        task = asyncio.create_task(_outbound_consumer())
+        logger.info("Web outbound consumer started")
+        yield
+        task.cancel()
+
+    app = FastAPI(title="MindMate", version="0.1.0", lifespan=lifespan)
 
     # 静态文件
     static_dir = APP_DIR / "static"
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # 聊天页面
+    def _serve(name: str) -> str:
+        return (static_dir / name).read_text(encoding="utf-8")
+
+    # 聊天页面（首页即聊天）
     @app.get("/", response_class=HTMLResponse)
     async def index():
-        return (static_dir / "index.html").read_text(encoding="utf-8")
+        return _serve("index.html")
 
     @app.get("/chat", response_class=HTMLResponse)
     async def chat_page():
-        return (static_dir / "chat.html").read_text(encoding="utf-8")
+        return _serve("index.html")
 
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard():
-        return (static_dir / "dashboard.html").read_text(encoding="utf-8")
+        return _serve("dashboard.html")
 
-    # API: 发送消息
+    # API: 发送消息（REST 备用入口）
     @app.post("/api/chat")
     async def send_message(content: str):
         await bus.publish_inbound(
@@ -57,42 +96,25 @@ def create_app(bus: Any) -> FastAPI:
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         await websocket.accept()
-        _clients.append(websocket)
-
+        clients.add(websocket)
+        logger.info("Client connected ({} total)", len(clients))
         try:
             while True:
-                # 1. 接收客户端消息 → 推送到总线
                 data = await websocket.receive_text()
                 await bus.publish_inbound(
                     InboundMessage(
-                        channel="web_ws",
+                        channel="web",
                         sender_id="user",
                         chat_id="default",
                         content=data,
                     )
                 )
         except WebSocketDisconnect:
-            _clients.remove(websocket)
+            pass
         except Exception:
-            if websocket in _clients:
-                _clients.remove(websocket)
-
-    # 供 Agent Loop 调用的推送方法
-    async def push_to_clients(content: str, metadata: dict | None = None) -> None:
-        """Agent 通过此方法推送消息给所有连接的客户端."""
-        import json
-        payload = {"type": "message", "content": content, "metadata": metadata or {}}
-        disconnected = []
-        for client in _clients:
-            try:
-                await client.send_text(json.dumps(payload, ensure_ascii=False))
-            except Exception:
-                disconnected.append(client)
-        for c in disconnected:
-            if c in _clients:
-                _clients.remove(c)
-
-    # 挂载到 bus 上，供 Agent 调用
-    bus.push_to_clients = push_to_clients
+            logger.exception("WebSocket error")
+        finally:
+            clients.discard(websocket)
+            logger.info("Client disconnected ({} remaining)", len(clients))
 
     return app

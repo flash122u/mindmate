@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
-import yaml
 from dotenv import load_dotenv
 
 # 项目根目录（CLAUDE.md 所在目录）

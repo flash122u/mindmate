@@ -1,11 +1,12 @@
 """基础测试 — 验证项目骨架可导入."""
 
 import sys
+
 sys.path.insert(0, '.')
 
 from mindmate import __version__
+from mindmate.bus.events import InboundMessage, MessageBus
 from mindmate.config import settings
-from mindmate.bus.events import MessageBus, InboundMessage
 from mindmate.memory import MemoryStore
 
 

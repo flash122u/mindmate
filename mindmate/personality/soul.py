@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from mindmate.config import MEMORY_DIR
 from mindmate.memory import MemoryStore
 
 
@@ -38,7 +35,8 @@ class SoulManager:
         marker = f"## {section}\n"
         if marker in current:
             idx = current.index(marker)
-            end = current.index("\n## ", idx + len(marker)) if f"\n## " in current[idx + len(marker):] else len(current)
+            rest = current[idx + len(marker):]
+            end = current.index("\n## ", idx + len(marker)) if "\n## " in rest else len(current)
             new_soul = current[:idx + len(marker)] + content + "\n" + current[end:]
         else:
             new_soul = current + f"\n## {section}\n{content}\n"

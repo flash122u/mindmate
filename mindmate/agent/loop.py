@@ -7,7 +7,6 @@ RESTORE → COMPACT → BUILD → RUN → SAVE → RESPOND → DONE
 from __future__ import annotations
 
 import asyncio
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -109,13 +108,7 @@ class AgentLoop:
         # 4. 更新关系阶段（根据情感倾向）
         self.relationship.update(msg.content, context.session_key)
 
-        # 5. 推送到所有 WebSocket 客户端
-        if hasattr(self.bus, "push_to_clients"):
-            await self.bus.push_to_clients(
-                response["content"],
-                metadata={"channel": msg.channel, "proactive": False},
-            )
-
+        # 5. 返回回复（由上层 PassiveLoop 发到 outbound 总线，Web 端消费投递）
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,

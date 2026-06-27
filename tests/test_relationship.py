@@ -1,6 +1,7 @@
 """测试关系阶段管理."""
 
 import sys
+
 sys.path.insert(0, '.')
 
 from mindmate.memory import MemoryStore

@@ -1,6 +1,7 @@
 """测试防御机制."""
 
 import sys
+
 sys.path.insert(0, '.')
 
 from mindmate.personality.defense import (

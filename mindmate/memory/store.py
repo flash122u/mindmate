@@ -14,8 +14,6 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from mindmate.config import MEMORY_DIR
 
 
@@ -90,8 +88,14 @@ class MemoryStore:
                 UNIQUE(session_key, cursor)
             )
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_history_session ON history(session_key, created_at)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_history_cursor ON history(session_key, cursor)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_history_session "
+            "ON history(session_key, created_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_history_cursor "
+            "ON history(session_key, cursor)"
+        )
 
         # 情绪锚点
         cur.execute("""
@@ -105,7 +109,10 @@ class MemoryStore:
                 created_at TEXT NOT NULL
             )
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_emotion_session ON emotion_anchors(session_key)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_emotion_session "
+            "ON emotion_anchors(session_key)"
+        )
 
         # 关系阶段
         cur.execute("""
@@ -238,7 +245,8 @@ class MemoryStore:
 
         cur = self._conn.cursor()
         cur.execute(
-            "INSERT INTO emotion_anchors (session_key, event, emotion, trigger, valence, created_at) "
+            "INSERT INTO emotion_anchors "
+            "(session_key, event, emotion, trigger, valence, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (session_key, event, emotion, trigger, valence, datetime.now().isoformat()),
         )

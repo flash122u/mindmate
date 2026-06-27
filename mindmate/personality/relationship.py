@@ -12,7 +12,6 @@ from loguru import logger
 
 from mindmate.memory import MemoryStore
 
-
 STAGE_THRESHOLDS = {
     "初识": 0,
     "朋友": 20,

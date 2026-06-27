@@ -7,7 +7,7 @@ from typing import Any
 
 from loguru import logger
 
-from mindmate.bus.events import InboundMessage, MessageBus, OutboundMessage
+from mindmate.bus.events import MessageBus
 
 
 class PassiveLoop:

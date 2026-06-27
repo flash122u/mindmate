@@ -1,6 +1,7 @@
 """测试能量模型."""
 
 import sys
+
 sys.path.insert(0, '..')
 
 from mindmate.agent.energy import EnergyModel

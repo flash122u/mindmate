@@ -1,10 +1,11 @@
 """测试 Agent Loop 核心逻辑."""
 
 import sys
+
 sys.path.insert(0, '..')
 
-from mindmate.bus.events import MessageBus
 from mindmate.agent.loop import AgentLoop
+from mindmate.bus.events import MessageBus
 
 
 def test_agent_loop_creation():
