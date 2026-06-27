@@ -6,7 +6,7 @@ import asyncio
 
 from loguru import logger
 
-from mindmate.agent.energy import EnergyModel
+from mindmate.agent.energy import EnergyRegistry
 from mindmate.agent.loop import AgentLoop
 from mindmate.agent.scheduler import DailyScheduler
 from mindmate.bus.events import MessageBus
@@ -38,12 +38,14 @@ async def main() -> None:
     logger.info("=== MindMate starting ===")
 
     bus = MessageBus()
-    # 能量模型由被动循环（重置沉默计时）和主动循环（判断开口时机）共享
-    energy = EnergyModel()
+    # 能量注册表：每个用户独立的沉默计时/冷却/每日计数
+    energy = EnergyRegistry()
     agent = AgentLoop(bus=bus, energy=energy)
 
     passive = PassiveLoop(bus, agent._process_message)
-    proactive = ProactiveLoop(energy, agent.generate_proactive)
+    proactive = ProactiveLoop(
+        energy, agent.generate_proactive, list_sessions=agent.memory.list_sessions
+    )
 
     tasks = [
         asyncio.create_task(run_web_server(bus)),

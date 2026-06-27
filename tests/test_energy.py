@@ -6,7 +6,7 @@ sys.path.insert(0, '.')
 
 import time
 
-from mindmate.agent.energy import EnergyModel
+from mindmate.agent.energy import EnergyModel, EnergyRegistry
 
 
 def _noon(day_offset_days: float = 0) -> float:
@@ -89,3 +89,22 @@ def test_daily_count_resets_next_day():
     assert e._proactive_count == 1
     e.mark_proactive(now=_noon(day_offset_days=1))  # 第二天
     assert e._proactive_count == 1  # 计数重置后又 +1
+
+
+def test_registry_lazy_creates_per_user():
+    reg = EnergyRegistry(idle_threshold_s=900)
+    a = reg.get("alice")
+    b = reg.get("bob")
+    assert a is not b
+    assert reg.get("alice") is a  # 同 key 返回同实例
+    assert a.idle_threshold_s == 900  # 配置透传
+
+
+def test_registry_isolation():
+    reg = EnergyRegistry(idle_threshold_s=1800)
+    reg.get("alice").on_user_message(now=_noon())
+    reg.get("bob")  # 创建 bob，但不互动
+    # alice 刚互动 → 不该开口
+    a_ok, _ = reg.get("alice").should_reach_out(now=_noon() + 60)
+    assert a_ok is False
+    assert set(reg.sessions()) == {"alice", "bob"}

@@ -92,3 +92,27 @@ class EnergyModel:
     @staticmethod
     def _day_of(t: float) -> str:
         return datetime.fromtimestamp(t).strftime("%Y-%m-%d")
+
+
+class EnergyRegistry:
+    """按 session_key 维护独立的 EnergyModel（多用户隔离）.
+
+    每个用户有自己的沉默计时、冷却、每日计数，互不影响。
+    用关键字参数承接 EnergyModel 的配置，懒创建。
+    """
+
+    def __init__(self, **model_kwargs: float | int) -> None:
+        self._model_kwargs = model_kwargs
+        self._models: dict[str, EnergyModel] = {}
+
+    def get(self, session_key: str) -> EnergyModel:
+        """取某用户的能量模型，不存在则按配置创建."""
+        model = self._models.get(session_key)
+        if model is None:
+            model = EnergyModel(**self._model_kwargs)
+            self._models[session_key] = model
+        return model
+
+    def sessions(self) -> list[str]:
+        """已创建能量模型的用户列表."""
+        return list(self._models.keys())

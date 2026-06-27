@@ -171,10 +171,10 @@ class AgentLoop:
         self.memory.append_history("user", msg.content, context.session_key)
         self.memory.append_history("assistant", full_text, context.session_key)
 
-        # 5. 更新关系阶段（根据情感倾向）+ 重置能量沉默计时
+        # 5. 更新关系阶段（根据情感倾向）+ 重置该用户的能量沉默计时
         self.relationship.update(msg.content, context.session_key)
         if self.energy is not None:
-            self.energy.on_user_message()
+            self.energy.get(context.session_key).on_user_message()
 
         # 6. 分段 + 打字延迟，逐条发到 outbound 总线
         await self._deliver_segments(
@@ -291,7 +291,8 @@ class AgentLoop:
 
     async def _build_context(self, msg: InboundMessage) -> TurnContext:
         """构建 LLM 上下文：system(人格/关系/防御) + 真实多轮对话 + 当前消息."""
-        ctx = TurnContext(msg=msg)
+        # 用 chat_id 作为用户标识，实现多用户记忆/关系隔离
+        ctx = TurnContext(msg=msg, session_key=msg.chat_id or "default")
 
         # 加载人格
         soul = self.memory.read_soul()

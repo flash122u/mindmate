@@ -38,6 +38,9 @@
   <span class="logo">🌿 MindMate</span>
   <a href="/dashboard" class="active">医生后台</a>
   <a href="/chat">聊天</a>
+  <label style="font-size:13px;color:#666;margin-left:12px">患者
+    <select id="user-select" onchange="onUserChange()" style="margin-left:6px;padding:3px 6px"></select>
+  </label>
   <span class="refresh" onclick="loadAll()">↻ 刷新</span>
 </nav>
 
@@ -75,8 +78,24 @@
 <script>
 const fmt = (iso) => iso ? iso.replace('T', ' ').slice(0, 16) : '';
 
+let currentUser = 'default';
+const q = (extra) => `?session_key=${encodeURIComponent(currentUser)}${extra || ''}`;
+
+async function loadUsers() {
+  const d = await (await fetch('/api/dashboard/users')).json();
+  const sel = document.getElementById('user-select');
+  const users = d.users && d.users.length ? d.users : ['default'];
+  if (!users.includes(currentUser)) currentUser = users[0];
+  sel.innerHTML = users.map(u => `<option value="${u}" ${u===currentUser?'selected':''}>${u}</option>`).join('');
+}
+
+function onUserChange() {
+  currentUser = document.getElementById('user-select').value;
+  loadAll();
+}
+
 async function loadOverview() {
-  const d = await (await fetch('/api/dashboard/overview')).json();
+  const d = await (await fetch('/api/dashboard/overview' + q())).json();
   const cls = d.high_alert_count > 0 ? 'danger' : (d.alert_count > 0 ? 'warn' : '');
   document.getElementById('overview').innerHTML = `
     <div class="stat-item"><div class="num">${d.turn_count}</div><div class="label">对话条数</div></div>
@@ -88,7 +107,7 @@ async function loadOverview() {
 }
 
 async function loadTrends() {
-  const d = await (await fetch('/api/dashboard/trends')).json();
+  const d = await (await fetch('/api/dashboard/trends' + q())).json();
   const pts = d.points || [];
   const svg = document.getElementById('trend');
   const emptyEl = document.getElementById('trend-empty');
@@ -111,7 +130,7 @@ async function loadTrends() {
 }
 
 async function loadAlerts() {
-  const d = await (await fetch('/api/dashboard/alerts')).json();
+  const d = await (await fetch('/api/dashboard/alerts' + q())).json();
   const tb = document.getElementById('alerts');
   if (!d.alerts.length) { tb.innerHTML = '<tr><td colspan="3" class="empty">暂无预警，一切平稳</td></tr>'; return; }
   tb.innerHTML = d.alerts.map(a => `
@@ -120,7 +139,7 @@ async function loadAlerts() {
 }
 
 async function loadHistory() {
-  const d = await (await fetch('/api/dashboard/history?limit=60')).json();
+  const d = await (await fetch('/api/dashboard/history' + q('&limit=60'))).json();
   const tb = document.getElementById('history');
   if (!d.history.length) { tb.innerHTML = '<tr><td colspan="3" class="empty">暂无对话</td></tr>'; return; }
   tb.innerHTML = d.history.map(h => {
@@ -131,8 +150,10 @@ async function loadHistory() {
 }
 
 async function loadAll() {
-  try { await Promise.all([loadOverview(), loadTrends(), loadAlerts(), loadHistory()]); }
-  catch (e) { console.error(e); }
+  try {
+    await loadUsers();
+    await Promise.all([loadOverview(), loadTrends(), loadAlerts(), loadHistory()]);
+  } catch (e) { console.error(e); }
 }
 loadAll();
 setInterval(loadAll, 15000);

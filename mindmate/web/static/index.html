@@ -60,11 +60,24 @@ const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('msg-input');
 const btnEl = document.getElementById('send-btn');
 
-// 连接 WebSocket
+// 用户标识：localStorage 持久化，支持 ?uid= 覆盖
+function getUid() {
+  const q = new URLSearchParams(location.search).get('uid');
+  if (q) { localStorage.setItem('mindmate_uid', q); return q; }
+  let uid = localStorage.getItem('mindmate_uid');
+  if (!uid) {
+    uid = 'u_' + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem('mindmate_uid', uid);
+  }
+  return uid;
+}
+const UID = getUid();
+
+// 连接 WebSocket（带 uid 标识用户）
 let ws = null;
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws = new WebSocket(`${proto}//${location.host}/ws?uid=${encodeURIComponent(UID)}`);
   ws.onmessage = (e) => {
     let data;
     try { data = JSON.parse(e.data); } catch { data = { type: 'message', content: e.data }; }
