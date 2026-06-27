@@ -3,7 +3,25 @@
 import sys
 sys.path.insert(0, '..')
 
-from mindmate.utils.splitter import split_message, delays_for_segments, MessageSplitter
+from mindmate.utils.splitter import split_message, delays_for_segments, MessageSplitter, clean_text
+
+
+class TestCleanText:
+    def test_remove_fullwidth_paren(self):
+        r = clean_text("（轻声）嗯...今天天气不错")
+        assert "（轻声）" not in r
+
+    def test_remove_halfwidth_paren(self):
+        r = clean_text("(sighs)今天心情不错")
+        assert "(sighs)" not in r
+
+    def test_multiple_parens(self):
+        r = clean_text("（笑）（小声）嗯......（低头）")
+        assert "（笑）" not in r and "（低头）" not in r
+
+    def test_no_parens_unchanged(self):
+        r = clean_text("今天天气真不错")
+        assert r == "今天天气真不错"
 
 
 class TestSplitMessage:

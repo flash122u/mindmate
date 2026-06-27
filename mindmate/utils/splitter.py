@@ -7,16 +7,33 @@ import re
 from typing import Any
 
 
+def clean_text(text: str) -> str:
+    """
+    清洗 LLM 原始回复文本：
+    1. 去掉 `（动作描述）` 和 `(动作描述)` — 括号里的动作/语气提示
+    2. 保留括号内的文字（去掉括号本身）
+    """
+    import re
+    # 去掉全角括号及内容: （动作描述）
+    text = re.sub(r'（[^）]*?）', '', text)
+    # 去掉半角括号及内容: (action description)
+    text = re.sub(r'\([^)]*?\)', '', text)
+    return text.strip()
+
+
 def split_message(text: str, max_length: int = 40) -> list[str]:
     """
     将一段话按句子拆成短段，模拟人聊天分开发送。
 
     策略：
-    1. 先按句号/问号/感叹号拆分出完整句子
-    2. 每个句子如果超过 max_length，再按逗号/分号拆分
-    3. 拆分后合并相邻的过短段（< 8 字），避免碎片化
-    4. 太短 (< 2) 的文本直接返回
+    1. 先清洗文本（去掉括号动作描述）
+    2. 按句号/问号/感叹号拆分出完整句子
+    3. 每个句子如果超过 max_length，再按逗号/分号拆分
+    4. 拆分后合并相邻的过短段（< 8 字），避免碎片化
+    5. 去掉每段末尾的句号（chat 风格）
+    6. 太短 (< 2) 的文本直接返回
     """
+    text = clean_text(text)
     if not text or len(text.strip()) <= 2:
         return [text.strip()]
 
@@ -65,6 +82,12 @@ def split_message(text: str, max_length: int = 40) -> list[str]:
             merged[-1] += seg
         else:
             merged.append(seg)
+
+    # 第四步：去掉每段末尾的句号（chat 风格不需要句号结尾）
+    merged = [seg.rstrip("。.") for seg in merged]
+
+    # 第五步：去掉空段
+    merged = [s.strip() for s in merged if s.strip()]
 
     return merged
 
