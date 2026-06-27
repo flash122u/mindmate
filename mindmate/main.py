@@ -28,15 +28,33 @@ async def run_proactive_loop(bus: MessageBus) -> None:
 
 
 async def run_outbound_consumer(bus: MessageBus) -> None:
-    """消费出站消息，推送到 WebSocket 客户端."""
+    """消费出站消息，分段推送到 WebSocket 客户端."""
+    from mindmate.utils.splitter import MessageSplitter
+
     while True:
         try:
             msg = await bus.consume_outbound()
-            if hasattr(bus, "push_to_clients"):
-                push_fn = bus.push_to_clients
+            if not hasattr(bus, "push_to_clients"):
+                continue
+
+            push_fn = bus.push_to_clients
+            content = msg.content
+            is_proactive = msg.metadata.get("proactive", False) if msg.metadata else False
+
+            # 分段推送
+            segments = list(MessageSplitter.yield_segments(content))
+
+            for seg, delay, is_last in segments:
+                if delay > 0:
+                    await asyncio.sleep(delay)
                 await push_fn(
-                    msg.content,
-                    metadata=msg.metadata,
+                    seg,
+                    metadata={
+                        **msg.metadata,
+                        "segment": True,
+                        "proactive": is_proactive,
+                        "is_last": is_last,
+                    },
                 )
         except asyncio.CancelledError:
             break
@@ -50,7 +68,9 @@ async def run_web_server(bus: MessageBus) -> None:
     from mindmate.web.app import create_app
 
     app = create_app(bus)
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    config = uvicorn.Config(app, host=settings.host, port=settings.port, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 async def main() -> None:

@@ -71,8 +71,22 @@ function connect() {
       const data = JSON.parse(e.data);
       if (data.type === 'message') {
         hideTyping();
-        addMsg(data.content, 'assistant');
-        btnEl.disabled = false;
+        if (data.metadata && data.metadata.segment) {
+          // 分段消息：追加到上一条助理气泡
+          const lastMsg = chatEl.lastElementChild;
+          if (lastMsg && lastMsg.classList.contains('assistant') && !data.metadata.is_last) {
+            addTextToLastMsg(' ' + data.content);
+          } else if (lastMsg && lastMsg.classList.contains('assistant') && data.metadata.is_last) {
+            addTextToLastMsg(' ' + data.content);
+            btnEl.disabled = false;
+          } else {
+            addMsg(data.content, 'assistant');
+            if (data.metadata.is_last) btnEl.disabled = false;
+          }
+        } else {
+          addMsg(data.content, 'assistant');
+          btnEl.disabled = false;
+        }
       }
     } catch {
       addMsg(e.data, 'assistant');
@@ -96,6 +110,14 @@ function addMsg(text, role) {
   div.textContent = text;
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function addTextToLastMsg(text) {
+  const lastMsg = chatEl.lastElementChild;
+  if (lastMsg && lastMsg.classList.contains('assistant')) {
+    lastMsg.textContent += text;
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
 }
 
 function showTyping() {

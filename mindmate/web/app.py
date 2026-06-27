@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from mindmate.bus.events import InboundMessage
 
@@ -42,7 +43,10 @@ def create_app(bus: Any) -> FastAPI:
 
     # API: 发送消息
     @app.post("/api/chat")
-    async def send_message(content: str):
+    async def send_message(body: dict):
+        content = body.get("content", "")
+        if not content:
+            return {"status": "error", "message": "empty content"}
         await bus.publish_inbound(
             InboundMessage(
                 channel="web",

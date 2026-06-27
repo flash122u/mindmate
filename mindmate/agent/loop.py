@@ -12,8 +12,6 @@ RESTORE → COMPACT → BUILD → RUN → SAVE → RESPOND → DONE
 from __future__ import annotations
 
 import asyncio
-import random
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -101,10 +99,10 @@ class AgentLoop:
         logger.info("Processing message from {}:{}", msg.channel, msg.sender_id)
 
         # 1. 防御检查
-        defense_result = self.defense.check(msg.content, msg.session_key)
+        defense_result = self.defense.check(msg.content, msg.chat_id)
 
         # 2. 记录互动（用于关系演进）
-        self.relationship.on_user_message(msg.session_key)
+        self.relationship.on_user_message(msg.chat_id)
 
         # 3. 构建上下文（含防御指令 + 关系信息）
         context = await self._build_context(msg, defense_result)
@@ -116,24 +114,13 @@ class AgentLoop:
         )
 
         # 5. 保存历史
-        self.memory.append_history(f"[{msg.sender_id}] {msg.content}", msg.session_key)
-        self.memory.append_history(f"[Assistant] {response['content']}", msg.session_key)
+        self.memory.append_history(f"[{msg.sender_id}] {msg.content}", msg.chat_id)
+        self.memory.append_history(f"[Assistant] {response['content']}", msg.chat_id)
 
         # 6. 记录互动情感（简化：默认中性 0.0，后续可用 LLM 评估）
-        self.relationship.record_interaction(0.0, msg.session_key)
+        self.relationship.record_interaction(0.0, msg.chat_id)
 
-        # 7. 推送到 WebSocket 客户端
-        if hasattr(self.bus, "push_to_clients"):
-            await self.bus.push_to_clients(
-                response["content"],
-                metadata={
-                    "channel": msg.channel,
-                    "proactive": False,
-                    "defense": defense_result is not None,
-                    "stage": context.relationship_stage,
-                },
-            )
-
+        # 7. 通过 bus 发布出站消息（由 run_outbound_consumer 统一推送）
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
