@@ -3,63 +3,98 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MindMate — 医生管理后台</title>
+<title>MindMate · 医生后台</title>
 <style>
+  :root {
+    --wx-green: #07c160;
+    --bg: #ededed;
+    --card: #ffffff;
+    --text: #181818;
+    --sub: #888;
+    --line: #eaeaea;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f0f2f5; color: #333; }
-  nav { background: #fff; padding: 12px 24px; border-bottom: 1px solid #e0e0e0; display: flex; gap: 24px; align-items: center; }
-  nav .logo { font-weight: 600; color: #07c160; }
-  nav a { text-decoration: none; color: #666; font-size: 14px; padding: 8px 0; border-bottom: 2px solid transparent; }
-  nav a.active { color: #07c160; border-bottom-color: #07c160; }
-  .container { max-width: 980px; margin: 24px auto; padding: 0 16px; }
-  .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
-  .card h2 { font-size: 15px; margin-bottom: 14px; color: #333; }
-  .stat { display: flex; gap: 36px; flex-wrap: wrap; }
-  .stat-item .num { font-size: 26px; font-weight: 600; color: #07c160; }
-  .stat-item .num.warn { color: #e65100; }
-  .stat-item .num.danger { color: #c62828; }
-  .stat-item .label { font-size: 12px; color: #999; margin-top: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #eee; color: #999; font-weight: 500; }
-  td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; color: #555; vertical-align: top; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
-  .badge.low { background: #fff8e1; color: #f57f17; }
-  .badge.medium { background: #fff3e0; color: #e65100; }
-  .badge.high { background: #ffebee; color: #c62828; font-weight: 600; }
-  .empty { color: #ccc; text-align: center; padding: 16px; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px;
+  }
+
+  /* 顶栏 */
+  header {
+    background: var(--wx-green); color: #fff;
+    padding: 14px 20px; display: flex; align-items: center; gap: 14px;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header .logo { font-size: 16px; font-weight: 600; }
+  header a { color: rgba(255,255,255,.85); text-decoration: none; font-size: 13px; }
+  header a:hover { color: #fff; }
+  header .spacer { flex: 1; }
+  header select {
+    border: none; border-radius: 14px; padding: 5px 12px; font-size: 13px;
+    background: rgba(255,255,255,.2); color: #fff; outline: none; cursor: pointer;
+  }
+  header select option { color: #333; }
+  header .refresh { cursor: pointer; font-size: 16px; opacity: .9; }
+  header .refresh:hover { opacity: 1; }
+
+  .container { max-width: 960px; margin: 16px auto; padding: 0 14px; }
+
+  /* 概览卡片 */
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .stat-item {
+    background: var(--card); border-radius: 12px; padding: 18px 14px; text-align: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  }
+  .stat-item .num { font-size: 26px; font-weight: 600; color: var(--wx-green); line-height: 1.1; }
+  .stat-item .num.warn { color: #fa8c16; }
+  .stat-item .num.danger { color: #f5222d; }
+  .stat-item .label { font-size: 12px; color: var(--sub); margin-top: 6px; }
+
+  .card { background: var(--card); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
+  .card h2 { font-size: 15px; margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+  .card h2 .bar { width: 3px; height: 14px; background: var(--wx-green); border-radius: 2px; }
+
   #trend { width: 100%; height: 160px; }
-  .msg-user { color: #07c160; }
-  .msg-assistant { color: #555; }
-  .refresh { margin-left: auto; font-size: 12px; color: #999; cursor: pointer; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--sub); font-weight: 500; }
+  td { padding: 9px 10px; border-bottom: 1px solid #f5f5f5; vertical-align: top; line-height: 1.5; }
+  tr:last-child td { border-bottom: none; }
+
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+  .badge.low { background: #fff7e6; color: #d46b08; }
+  .badge.medium { background: #fff1e6; color: #d4380d; }
+  .badge.high { background: #fff1f0; color: #cf1322; }
+  .empty { color: #c8c8c8; text-align: center; padding: 18px; }
+
+  .who { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 12px; }
+  .who.assistant { background: #e7f9ee; color: var(--wx-green); }
+  .who.user { background: #f0f0f0; color: #666; }
 </style>
 </head>
 <body>
-<nav>
+<header>
   <span class="logo">🌿 MindMate</span>
-  <a href="/dashboard" class="active">医生后台</a>
-  <a href="/chat">聊天</a>
-  <label style="font-size:13px;color:#666;margin-left:12px">患者
-    <select id="user-select" onchange="onUserChange()" style="margin-left:6px;padding:3px 6px"></select>
-  </label>
-  <span class="refresh" onclick="loadAll()">↻ 刷新</span>
-</nav>
+  <a href="/chat">← 返回聊天</a>
+  <span class="spacer"></span>
+  <span style="font-size:13px;opacity:.85">患者</span>
+  <select id="user-select" onchange="onUserChange()"></select>
+  <span class="refresh" onclick="loadAll()" title="刷新">↻</span>
+</header>
 
 <div class="container">
-  <div class="card">
-    <h2>概览</h2>
-    <div class="stat" id="overview">
-      <div class="empty">加载中…</div>
-    </div>
+  <div class="overview" id="overview">
+    <div class="empty" style="grid-column:1/-1">加载中…</div>
   </div>
 
   <div class="card">
-    <h2>情绪趋势（情绪锚点 valence 时间序列）</h2>
+    <h2><span class="bar"></span>情绪趋势</h2>
     <svg id="trend" viewBox="0 0 900 160" preserveAspectRatio="none"></svg>
     <div id="trend-empty" class="empty" style="display:none">暂无情绪数据</div>
   </div>
 
   <div class="card">
-    <h2>⚠️ 风险预警</h2>
+    <h2><span class="bar"></span>⚠️ 风险预警</h2>
     <table>
       <thead><tr><th style="width:70px">等级</th><th style="width:140px">时间</th><th>触发内容</th></tr></thead>
       <tbody id="alerts"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
@@ -67,7 +102,7 @@
   </div>
 
   <div class="card">
-    <h2>对话回放</h2>
+    <h2><span class="bar"></span>对话回放</h2>
     <table>
       <thead><tr><th style="width:60px">角色</th><th style="width:140px">时间</th><th>内容</th></tr></thead>
       <tbody id="history"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
@@ -113,18 +148,24 @@ async function loadTrends() {
   const emptyEl = document.getElementById('trend-empty');
   if (pts.length < 2) { svg.style.display='none'; emptyEl.style.display='block'; return; }
   svg.style.display='block'; emptyEl.style.display='none';
-  const W = 900, H = 160, pad = 10;
+  const W = 900, H = 160, pad = 14;
   const n = pts.length;
   const x = (i) => pad + (W - 2*pad) * i / (n - 1);
-  const y = (v) => H/2 - v * (H/2 - pad);  // valence -1..1 → 底..顶
+  const y = (v) => H/2 - v * (H/2 - pad);
   let path = '';
   pts.forEach((p, i) => { path += (i ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(p.valence).toFixed(1) + ' '; });
+  let area = path + `L${x(n-1).toFixed(1)},${H/2} L${x(0).toFixed(1)},${H/2} Z`;
   const dots = pts.map((p, i) => {
-    const color = p.valence >= 0 ? '#07c160' : '#e57373';
-    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.valence).toFixed(1)}" r="3" fill="${color}"><title>${p.emotion}: ${p.valence}</title></circle>`;
+    const color = p.valence >= 0 ? '#07c160' : '#f5a623';
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(p.valence).toFixed(1)}" r="3.5" fill="${color}"><title>${p.emotion}: ${p.valence}</title></circle>`;
   }).join('');
   svg.innerHTML = `
+    <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#07c160" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#07c160" stop-opacity="0"/>
+    </linearGradient></defs>
     <line x1="0" y1="${H/2}" x2="${W}" y2="${H/2}" stroke="#eee" stroke-width="1"/>
+    <path d="${area}" fill="url(#g)"/>
     <path d="${path}" fill="none" stroke="#07c160" stroke-width="2"/>
     ${dots}`;
 }
@@ -144,8 +185,8 @@ async function loadHistory() {
   if (!d.history.length) { tb.innerHTML = '<tr><td colspan="3" class="empty">暂无对话</td></tr>'; return; }
   tb.innerHTML = d.history.map(h => {
     const who = h.role === 'assistant' ? '小暖' : '用户';
-    const cls = h.role === 'assistant' ? 'msg-assistant' : 'msg-user';
-    return `<tr><td class="${cls}">${who}</td><td>${fmt(h.created_at)}</td><td>${h.content}</td></tr>`;
+    const cls = h.role === 'assistant' ? 'assistant' : 'user';
+    return `<tr><td><span class="who ${cls}">${who}</span></td><td>${fmt(h.created_at)}</td><td>${h.content}</td></tr>`;
   }).join('');
 }
 
