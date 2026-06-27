@@ -53,7 +53,7 @@ def test_segmented_delivery():
     from mindmate.bus.events import InboundMessage
 
     bus = MessageBus()
-    loop = AgentLoop(bus=bus, delays_enabled=False)  # 关延迟加速测试
+    loop = AgentLoop(bus=bus, delays_enabled=False, memory_maintenance=False)
 
     # mock LLM 返回多句话
     async def fake_chat(messages, temperature=0.7):

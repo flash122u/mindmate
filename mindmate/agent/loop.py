@@ -18,6 +18,9 @@ from mindmate.bus.events import InboundMessage, OutboundMessage
 from mindmate.llm import DeepSeekProvider
 from mindmate.memory import MemoryStore
 from mindmate.personality.defense import DefenseMechanism
+from mindmate.personality.emotion_anchor import EmotionAnchorManager
+from mindmate.personality.forget import ForgetAgent
+from mindmate.personality.memory_consolidator import MemoryConsolidator
 from mindmate.personality.relationship import RelationshipManager
 from mindmate.utils.splitter import split_message, think_delay, typing_delay
 
@@ -79,14 +82,21 @@ class AgentLoop:
         workspace: Path | None = None,
         delays_enabled: bool = True,
         energy: Any = None,
+        memory_maintenance: bool = True,
     ) -> None:
         self.bus = bus
         self.provider = DeepSeekProvider()
         self.memory = MemoryStore(workspace)
         self.defense = DefenseMechanism()
         self.relationship = RelationshipManager(self.memory)
+        # 情绪锚点 + 记忆整合 + 遗忘
+        self.anchors = EmotionAnchorManager(self.memory, self.provider)
+        self.consolidator = MemoryConsolidator(self.memory, self.provider)
+        self.forget = ForgetAgent(self.memory)
         # 能量模型（主动行为调度）；与 ProactiveLoop 共享同一实例
         self.energy = energy
+        # 是否在对话后做记忆维护（提取锚点/整合/遗忘），测试时可关闭
+        self.memory_maintenance = memory_maintenance
         # 是否启用"不秒回"延迟（测试时可关闭）
         self.delays_enabled = delays_enabled
         self._running = False
@@ -160,7 +170,20 @@ class AgentLoop:
         await self._deliver_segments(
             msg.channel, msg.chat_id, full_text, proactive=False
         )
+
+        # 7. 后台沉淀记忆：提取情绪锚点 + 整合长期记忆（不阻塞回复）
+        if self.memory_maintenance:
+            asyncio.create_task(self._post_turn_memory(context.session_key))
         return None
+
+    async def _post_turn_memory(self, session_key: str) -> None:
+        """对话后的记忆维护：提取情绪锚点、整合长期记忆、遗忘陈旧锚点."""
+        try:
+            await self.anchors.extract(session_key)
+            await self.consolidator.maybe_consolidate(session_key)
+            self.forget.forget_stale(session_key)
+        except Exception:
+            logger.exception("Post-turn memory maintenance failed")
 
     async def generate_proactive(self, session_key: str = "default") -> None:
         """主动开口：不回应具体问题，自然地发起一段对话.
@@ -270,16 +293,24 @@ class AgentLoop:
         # 关系状态
         relationship_prompt = self.relationship.build_relationship_prompt(ctx.session_key)
 
-        # 构建 system 消息（人格 + 关系 + 防御 + 风格约束 + few-shot）
+        # 长期记忆（MEMORY.md，沉淀的旧事）
+        long_term = self.memory.read_memory().strip()
+
+        # 召回被当前消息触发的情绪锚点
+        recalled = self.anchors.recall(msg.content, ctx.session_key)
+        anchor_prompt = self.anchors.build_anchor_prompt(recalled)
+
+        # 构建 system 消息（人格 + 关系 + 长期记忆 + 情绪锚点 + 防御 + 风格 + few-shot）
         system_parts = [
             f"## 你是谁\n{soul}",
             "",
             relationship_prompt,
-            "",
-            self._STYLE_RULES,
-            "",
-            self._FEWSHOT,
         ]
+        if long_term:
+            system_parts.extend(["", f"## 你记得的一些事\n{long_term}"])
+        if anchor_prompt:
+            system_parts.extend(["", anchor_prompt])
+        system_parts.extend(["", self._STYLE_RULES, "", self._FEWSHOT])
         if defense_prompt:
             system_parts.extend(["", defense_prompt])
 
