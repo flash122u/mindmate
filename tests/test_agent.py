@@ -20,7 +20,7 @@ def test_build_context():
     from mindmate.bus.events import InboundMessage
     msg = InboundMessage(channel="web", sender_id="user", chat_id="default", content="你好")
     import asyncio
-    ctx = asyncio.run(loop._build_context(msg, defense_result=None))
+    ctx = asyncio.run(loop._build_context(msg))
     assert len(ctx.messages) >= 2
     assert ctx.messages[0]["role"] == "system"
     assert ctx.messages[1]["role"] == "user"
