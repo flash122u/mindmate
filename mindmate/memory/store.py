@@ -278,6 +278,12 @@ class MemoryStore:
         """读取该 session 的全部历史."""
         return self.read_history(session_key, limit=10000)
 
+    def list_sessions(self) -> list[str]:
+        """返回所有有过对话的 session_key（去重），供调度器/后台遍历用户."""
+        cur = self._conn.cursor()
+        cur.execute("SELECT DISTINCT session_key FROM history ORDER BY session_key")
+        return [r["session_key"] for r in cur.fetchall()]
+
     # ------------------------------------------------------------------
     # 情绪锚点
     # ------------------------------------------------------------------

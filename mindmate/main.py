@@ -8,6 +8,7 @@ from loguru import logger
 
 from mindmate.agent.energy import EnergyModel
 from mindmate.agent.loop import AgentLoop
+from mindmate.agent.scheduler import DailyScheduler
 from mindmate.bus.events import MessageBus
 from mindmate.config import settings
 from mindmate.proactive.loop import ProactiveLoop
@@ -44,17 +45,27 @@ async def main() -> None:
     passive = PassiveLoop(bus, agent._process_message)
     proactive = ProactiveLoop(energy, agent.generate_proactive)
 
-    web_task = asyncio.create_task(run_web_server(bus))
-    agent_task = asyncio.create_task(passive.run())
-    proactive_task = asyncio.create_task(proactive.run())
+    tasks = [
+        asyncio.create_task(run_web_server(bus)),
+        asyncio.create_task(passive.run()),
+        asyncio.create_task(proactive.run()),
+    ]
+
+    # 每日内在生活调度器（日记/梦自动生成）
+    if settings.inner_life_enabled:
+        scheduler = DailyScheduler(
+            run_cb=agent.run_daily_inner_life,
+            list_sessions=agent.memory.list_sessions,
+            hour=settings.inner_life_hour,
+        )
+        tasks.append(asyncio.create_task(scheduler.run()))
 
     try:
-        await asyncio.gather(web_task, agent_task, proactive_task)
+        await asyncio.gather(*tasks)
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Shutting down...")
-        agent_task.cancel()
-        proactive_task.cancel()
-        web_task.cancel()
+        for t in tasks:
+            t.cancel()
 
 
 if __name__ == "__main__":

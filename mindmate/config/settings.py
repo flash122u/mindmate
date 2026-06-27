@@ -31,6 +31,11 @@ class Settings:
         self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.host: str = os.getenv("HOST", "0.0.0.0")
         self.port: int = int(os.getenv("PORT", "19876"))
+        # 每日内在生活（日记/梦）调度
+        self.inner_life_enabled: bool = (
+            os.getenv("INNER_LIFE_ENABLED", "true").lower() == "true"
+        )
+        self.inner_life_hour: int = int(os.getenv("INNER_LIFE_HOUR", "3"))
         ensure_dirs()
 
 
