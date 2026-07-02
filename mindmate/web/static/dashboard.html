@@ -88,6 +88,13 @@
   </div>
 
   <div class="card">
+    <h2><span class="bar"></span>上下文管理</h2>
+    <div class="overview" id="context-stats">
+      <div class="empty" style="grid-column:1/-1">加载中…</div>
+    </div>
+  </div>
+
+  <div class="card">
     <h2><span class="bar"></span>情绪趋势</h2>
     <svg id="trend" viewBox="0 0 900 160" preserveAspectRatio="none"></svg>
     <div id="trend-empty" class="empty" style="display:none">暂无情绪数据</div>
@@ -107,6 +114,15 @@
       <thead><tr><th style="width:60px">角色</th><th style="width:140px">时间</th><th>内容</th></tr></thead>
       <tbody id="history"><tr><td colspan="3" class="empty">加载中…</td></tr></tbody>
     </table>
+  </div>
+
+  <div class="card">
+    <h2><span class="bar"></span>Agent 运行轨迹
+      <span style="font-size:12px;color:var(--sub);cursor:pointer;font-weight:400" id="traces-toggle" onclick="toggleTraces()">▸ 展开</span>
+    </h2>
+    <div id="traces-section" style="display:none">
+      <div id="traces-content" class="empty">加载中…</div>
+    </div>
   </div>
 </div>
 
@@ -132,12 +148,14 @@ function onUserChange() {
 async function loadOverview() {
   const d = await (await fetch('/api/dashboard/overview' + q())).json();
   const cls = d.high_alert_count > 0 ? 'danger' : (d.alert_count > 0 ? 'warn' : '');
+  const rd = d.route_distribution || {};
   document.getElementById('overview').innerHTML = `
     <div class="stat-item"><div class="num">${d.turn_count}</div><div class="label">对话条数</div></div>
     <div class="stat-item"><div class="num">${d.stage}</div><div class="label">关系阶段</div></div>
     <div class="stat-item"><div class="num">${d.avg_valence}</div><div class="label">平均情绪 (-1~1)</div></div>
     <div class="stat-item"><div class="num">${d.anchor_count}</div><div class="label">情绪锚点</div></div>
     <div class="stat-item"><div class="num ${cls}">${d.alert_count}</div><div class="label">风险预警 (高危 ${d.high_alert_count})</div></div>
+    <div class="stat-item"><div class="num" style="font-size:18px">💬${rd.chat||0} ⚠${rd.risk||0} 🔧${rd.functional||0} 🪪${rd.identity||0}</div><div class="label">路由分布 (聊/危/功/身)</div></div>
   `;
 }
 
@@ -190,10 +208,64 @@ async function loadHistory() {
   }).join('');
 }
 
+async function loadTraces() {
+  try {
+    const d = await (await fetch('/api/dashboard/traces' + q('&limit=10'))).json();
+    const el = document.getElementById('traces-content');
+    if (!d.traces || !d.traces.length) {
+      el.innerHTML = '<div class="empty">暂无运行轨迹（发送一条消息后出现）</div>'; return;
+    }
+    el.innerHTML = d.traces.map(t => {
+      const stepsHtml = (t.steps || []).map(s => {
+        const color = s.status === 'error' ? '#f5222d' : s.status === 'skipped' ? '#bbb' : '#333';
+        const icon = s.status === 'error' ? '✕' : s.status === 'skipped' ? '○' : '✓';
+        return `<div style="font-size:12px;padding:2px 0;color:${color};display:flex;gap:8px">
+          <span style="min-width:20px;text-align:right">${icon}</span>
+          <span style="min-width:130px">${s.step_name}</span>
+          <span style="min-width:45px;color:var(--sub)">${s.elapsed_ms}ms</span>
+          <span style="color:var(--sub)">${s.detail}</span>
+        </div>`;
+      }).join('');
+      return `<div style="margin-bottom:10px;padding:10px 12px;background:#fafafa;border-radius:8px">
+        <div style="font-size:12px;color:var(--sub);margin-bottom:6px;display:flex;justify-content:space-between">
+          <span>${fmt(t.started_at)}</span>
+          <span>总耗时 <b>${t.total_elapsed_ms}ms</b></span>
+        </div>
+        ${stepsHtml}
+      </div>`;
+    }).join('');
+  } catch(e) { console.error(e); }
+}
+
+function toggleTraces() {
+  const el = document.getElementById('traces-section');
+  const btn = document.getElementById('traces-toggle');
+  if (el.style.display === 'none') {
+    el.style.display = 'block'; btn.textContent = '▾ 收起';
+  } else {
+    el.style.display = 'none'; btn.textContent = '▸ 展开';
+  }
+}
+
+async function loadContextStats() {
+  try {
+    const d = await (await fetch('/api/dashboard/context-stats' + q())).json();
+    document.getElementById('context-stats').innerHTML = `
+      <div class="stat-item"><div class="num">${d.window_size}</div><div class="label">窗口轮数</div></div>
+      <div class="stat-item"><div class="num">${d.total_history_rows}</div><div class="label">历史总条数</div></div>
+      <div class="stat-item"><div class="num">${d.compression_ratio}x</div><div class="label">压缩比</div></div>
+      <div class="stat-item"><div class="num">${d.system_prompt_chars_approx}</div><div class="label">System Prompt (chars)</div></div>
+      <div class="stat-item"><div class="num">${d.anchor_recall_count}</div><div class="label">本轮召回锚点</div></div>
+      <div class="stat-item"><div class="num">${d.anchor_store_count}</div><div class="label">存储锚点总数</div></div>
+      <div class="stat-item"><div class="num">${d.memory_md_chars}</div><div class="label">MEMORY.md (chars)</div></div>
+    `;
+  } catch(e) { console.error(e); }
+}
+
 async function loadAll() {
   try {
     await loadUsers();
-    await Promise.all([loadOverview(), loadTrends(), loadAlerts(), loadHistory()]);
+    await Promise.all([loadOverview(), loadTrends(), loadAlerts(), loadHistory(), loadTraces(), loadContextStats()]);
   } catch (e) { console.error(e); }
 }
 loadAll();

@@ -176,6 +176,24 @@ class MemoryStore:
             "ON crisis_alerts(session_key, created_at)"
         )
 
+        # Agent 运行轨迹（可观测性）
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS agent_traces (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id TEXT NOT NULL UNIQUE,
+                session_key TEXT NOT NULL DEFAULT 'default',
+                message_id TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                steps_json TEXT NOT NULL DEFAULT '[]',
+                total_elapsed_ms REAL
+            )
+        """)
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_traces_session "
+            "ON agent_traces(session_key, started_at DESC)"
+        )
+
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -503,6 +521,125 @@ class MemoryStore:
             (session_key, limit),
         )
         return [dict(r) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Agent 运行轨迹（可观测性）
+    # ------------------------------------------------------------------
+
+    def add_agent_trace(
+        self,
+        trace_id: str,
+        session_key: str,
+        message_id: str,
+        started_at: str,
+        completed_at: str,
+        steps: list[dict[str, Any]],
+        total_elapsed_ms: float,
+    ) -> None:
+        """写入一条 Agent 运行轨迹（steps 序列化为 JSON）."""
+        import json
+
+        cur = self._conn.cursor()
+        cur.execute(
+            "INSERT OR REPLACE INTO agent_traces "
+            "(trace_id, session_key, message_id, started_at, completed_at, "
+            "steps_json, total_elapsed_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                trace_id,
+                session_key,
+                message_id,
+                started_at,
+                completed_at,
+                json.dumps(steps, ensure_ascii=False),
+                total_elapsed_ms,
+            ),
+        )
+        self._conn.commit()
+
+    def get_agent_traces(
+        self, session_key: str = "default", limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """获取最近 N 条 trace，steps 已从 JSON 解析."""
+        import json
+
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT trace_id, session_key, message_id, started_at, completed_at, "
+            "steps_json, total_elapsed_ms "
+            "FROM agent_traces WHERE session_key = ? ORDER BY id DESC LIMIT ?",
+            (session_key, limit),
+        )
+        results = []
+        for row in cur.fetchall():
+            d = dict(row)
+            try:
+                d["steps"] = json.loads(d.pop("steps_json"))
+            except (json.JSONDecodeError, TypeError):
+                d["steps"] = []
+            results.append(d)
+        return results
+
+    # ------------------------------------------------------------------
+    # 上下文管理指标（面试向：可量化的压缩比/窗口大小/锚点召回）
+    # ------------------------------------------------------------------
+
+    def get_context_stats(self, session_key: str = "default") -> dict[str, Any]:
+        """计算上下文管理指标（从现有数据，无副作用）."""
+        cur = self._conn.cursor()
+
+        # 1. 历史总条数
+        cur.execute(
+            "SELECT COUNT(*) FROM history WHERE session_key = ?", (session_key,)
+        )
+        total_history_rows = cur.fetchone()[0]
+        # 实际窗口：LLM 最多看到 20 merged turns
+        window_size = min(total_history_rows, 20)
+
+        # 2. system prompt 估算（SOUL.md + 静态规则）
+        soul = self.read_soul()
+        # AgentLoop._STYLE_RULES ≈ 400 chars, _FEWSHOT ≈ 250 chars
+        system_prompt_chars = len(soul) + 400 + 250
+
+        # 3. 本轮锚点召回数（从最新 trace 的 ANCHOR_RECALL 步骤提取）
+        anchor_recall_count = 0
+        traces = self.get_agent_traces(session_key, limit=1)
+        if traces:
+            for step in traces[0].get("steps", []):
+                if step.get("step_name") == "ANCHOR_RECALL":
+                    detail = step.get("detail", "")
+                    if "hits=" in detail:
+                        try:
+                            anchor_recall_count = int(
+                                detail.split("hits=")[1].split(",")[0]
+                            )
+                        except (ValueError, IndexError):
+                            anchor_recall_count = 0
+                    break
+
+        # 4. 锚点存储总数
+        cur.execute(
+            "SELECT COUNT(*) FROM emotion_anchors WHERE session_key = ?",
+            (session_key,),
+        )
+        anchor_store_count = cur.fetchone()[0]
+
+        # 5. MEMORY.md 大小
+        memory_md = self.read_memory()
+        memory_md_chars = len(memory_md)
+
+        # 6. 压缩比：存储条数 / 窗口大小（>1 表示有压缩）
+        compression_ratio = round(total_history_rows / max(window_size, 1), 2)
+
+        return {
+            "window_size": window_size,
+            "total_history_rows": total_history_rows,
+            "system_prompt_chars_approx": system_prompt_chars,
+            "anchor_recall_count": anchor_recall_count,
+            "anchor_store_count": anchor_store_count,
+            "memory_md_chars": memory_md_chars,
+            "compression_ratio": compression_ratio,
+        }
 
     # ------------------------------------------------------------------
     # 清理

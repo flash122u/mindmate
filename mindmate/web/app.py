@@ -117,6 +117,17 @@ def create_app(bus: Any) -> FastAPI:
         avg_valence = (
             sum(a["valence"] for a in anchors) / len(anchors) if anchors else 0.0
         )
+        # 路由分布：从 traces 中聚合 INTENT_ROUTE 步骤
+        traces = store.get_agent_traces(session_key, limit=200)
+        route_counts = {"chat": 0, "risk": 0, "functional": 0, "identity": 0}
+        for t in traces:
+            for step in t.get("steps", []):
+                if step.get("step_name") == "INTENT_ROUTE":
+                    detail = step.get("detail", "")
+                    for intent in route_counts:
+                        if f"intent={intent}" in detail:
+                            route_counts[intent] += 1
+                            break
         return {
             "stage": rel["stage"],
             "anchor_count": len(anchors),
@@ -124,6 +135,7 @@ def create_app(bus: Any) -> FastAPI:
             "high_alert_count": sum(1 for a in alerts if a["level"] == "high"),
             "turn_count": len(history),
             "avg_valence": round(avg_valence, 2),
+            "route_distribution": route_counts,
         }
 
     @app.get("/api/dashboard/trends")
@@ -137,6 +149,14 @@ def create_app(bus: Any) -> FastAPI:
     @app.get("/api/dashboard/history")
     async def dashboard_history(session_key: str = "default", limit: int = 100):
         return {"history": store.read_history(session_key, limit=limit)}
+
+    @app.get("/api/dashboard/traces")
+    async def dashboard_traces(session_key: str = "default", limit: int = 10):
+        return {"traces": store.get_agent_traces(session_key, limit=limit)}
+
+    @app.get("/api/dashboard/context-stats")
+    async def dashboard_context_stats(session_key: str = "default"):
+        return store.get_context_stats(session_key)
 
     # WebSocket: 双向实时通信。?uid=xxx 标识用户，缺省 default
     @app.websocket("/ws")

@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time as _time_module
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from mindmate.agent.router import IntentResult, IntentRouter
+from mindmate.agent.trace import TraceBuilder
 from mindmate.bus.events import InboundMessage, OutboundMessage
 from mindmate.config import settings
 from mindmate.llm import DeepSeekProvider
@@ -90,12 +94,15 @@ class AgentLoop:
         energy: Any = None,
         memory_maintenance: bool = True,
         tools: Any = None,
+        router: IntentRouter | None = None,
     ) -> None:
         self.bus = bus
         self.provider = DeepSeekProvider()
         self.memory = MemoryStore(workspace)
         # 工具注册表（None 或空 → 退化为单轮对话，行为不变）
         self.tools = tools
+        # 意图路由器（可注入，测试友好）
+        self.router = router or IntentRouter()
         self.defense = DefenseMechanism()
         self.relationship = RelationshipManager(self.memory)
         # 情绪锚点 + 记忆整合 + 遗忘
@@ -162,15 +169,55 @@ class AgentLoop:
         """
         logger.info("Processing message from {}:{}", msg.channel, msg.sender_id)
 
-        # 1. 构建上下文（含防御检查 + 关系状态）
-        context = await self._build_context(msg)
+        session_key = msg.chat_id or "default"
+        trace = TraceBuilder(session_key=session_key, message_id=msg.content[:60])
+
+        # 0. 意图路由（LLM 调用前，规则分类）
+        trace.begin("INTENT_ROUTE")
+        intent_result = self.router.route(msg.content)
+        trace.end(
+            "ok",
+            f"intent={intent_result.intent} confidence={intent_result.confidence:.2f}",
+        )
+
+        # 快速路径：非 chat 意图用预写回复模板，零 LLM 调用
+        fast_path = _fast_path_response(intent_result, self.router)
+        if fast_path is not None:
+            logger.info(
+                "Fast-path: intent={} for {}", intent_result.intent, session_key
+            )
+            # risk 路径仍需记录预警
+            if intent_result.intent == "risk":
+                self.crisis.check_and_record(msg.content, session_key)
+            segments = split_message(fast_path) or [fast_path]
+            self.memory.append_history("user", msg.content, session_key)
+            for seg in segments:
+                self.memory.append_history("assistant", seg, session_key)
+            if self.energy is not None:
+                self.energy.get(session_key).on_user_message()
+            await self._deliver_segments(
+                msg.channel, msg.chat_id, segments, proactive=False
+            )
+            self._flush_trace(trace)
+            return None
+
+        # 正常路径：chat → 原有流程
+        context = await self._build_context(msg, trace)
 
         # 2. 思考延迟（不秒回）
         if self.delays_enabled:
             await asyncio.sleep(think_delay(msg.content))
 
         # 3. 调用 LLM（带工具调用循环）
-        full_text = await self._run_llm(context.messages)
+        trace.begin("LLM_CALL")
+        try:
+            full_text = await self._run_llm(context.messages, trace)
+            trace.end("ok", f"response {len(full_text)} chars")
+        except Exception:
+            trace.end("error", "LLM call failed")
+            self._flush_trace(trace)
+            raise
+
         segments = split_message(full_text) or [full_text]
 
         # 4. 保存历史：用户一行 + 每个分段各一行（前端按行显示分段气泡，
@@ -180,7 +227,13 @@ class AgentLoop:
             self.memory.append_history("assistant", seg, context.session_key)
 
         # 5. 更新关系阶段（根据情感倾向）+ 重置该用户的能量沉默计时
-        self.relationship.update(msg.content, context.session_key)
+        trace.begin("RELATIONSHIP_UPDATE")
+        try:
+            self.relationship.update(msg.content, context.session_key)
+            state = self.relationship.get_state(context.session_key)
+            trace.end("ok", f"stage={state.stage}")
+        except Exception:
+            trace.end("error", "relationship update failed")
         if self.energy is not None:
             self.energy.get(context.session_key).on_user_message()
 
@@ -190,11 +243,21 @@ class AgentLoop:
         )
 
         # 7. 后台沉淀记忆：提取情绪锚点 + 整合长期记忆（不阻塞回复）
+        trace.begin("MEMORY_MAINTENANCE")
         if self.memory_maintenance:
             asyncio.create_task(self._post_turn_memory(context.session_key))
+            trace.end("ok", "started background task")
+        else:
+            trace.end("skipped", "memory_maintenance disabled")
+
+        self._flush_trace(trace)
         return None
 
-    async def _run_llm(self, messages: list[dict[str, Any]]) -> str:
+    async def _run_llm(
+        self,
+        messages: list[dict[str, Any]],
+        trace: TraceBuilder | None = None,
+    ) -> str:
         """调用 LLM；若注册了工具则进入工具调用循环.
 
         无工具时退化为单轮 chat（与原行为完全一致）。
@@ -218,8 +281,12 @@ class AgentLoop:
             # 把助手的"调用工具"这一回合追加进对话
             work.append(resp["raw_message"])
             for tc in tool_calls:
+                if trace is not None:
+                    trace.begin("TOOL_CALL")
                 logger.info("Tool call: {}({})", tc["name"], tc["arguments"])
                 result = await self.tools.execute(tc["name"], tc["arguments"])
+                if trace is not None:
+                    trace.end("ok", f"{tc['name']}")
                 work.append(
                     {"role": "tool", "tool_call_id": tc["id"], "content": result}
                 )
@@ -357,7 +424,9 @@ class AgentLoop:
                 )
             )
 
-    async def _build_context(self, msg: InboundMessage) -> TurnContext:
+    async def _build_context(
+        self, msg: InboundMessage, trace: TraceBuilder | None = None
+    ) -> TurnContext:
         """构建 LLM 上下文：system(人格/关系/防御) + 真实多轮对话 + 当前消息."""
         # 用 chat_id 作为用户标识，实现多用户记忆/关系隔离
         ctx = TurnContext(msg=msg, session_key=msg.chat_id or "default")
@@ -366,25 +435,46 @@ class AgentLoop:
         soul = self.memory.read_soul()
 
         # 防御检查
+        if trace is not None:
+            trace.begin("DEFENSE_CHECK")
         defense_result = self.defense.check(msg.content, ctx.session_key)
         defense_prompt = self.defense.build_defense_prompt(defense_result)
+        if trace is not None:
+            trace.end("ok", f"triggered={defense_result.triggered}")
 
         # 风险检测（命中则记录预警 + 注入关切指引）
+        if trace is not None:
+            trace.begin("CRISIS_CHECK")
         crisis_result = self.crisis.check_and_record(msg.content, ctx.session_key)
         care_prompt = self.crisis.build_care_prompt(crisis_result)
+        if trace is not None:
+            trace.end("ok", f"level={crisis_result.level}")
 
         # 关系状态
-        relationship_prompt = self.relationship.build_relationship_prompt(ctx.session_key)
+        relationship_prompt = self.relationship.build_relationship_prompt(
+            ctx.session_key
+        )
 
         # 长期记忆（MEMORY.md，沉淀的旧事）
         long_term = self.memory.read_memory().strip()
 
         # 召回被当前消息触发的情绪锚点
+        if trace is not None:
+            trace.begin("ANCHOR_RECALL")
         recalled = self.anchors.recall(msg.content, ctx.session_key)
         anchor_prompt = self.anchors.build_anchor_prompt(recalled)
+        if trace is not None:
+            trace.end("ok", f"hits={len(recalled)}")
 
         # 分享冲动：交心时刻才考虑吐露一点私密的日记/梦
+        if trace is not None:
+            trace.begin("INNER_LIFE_SHARE")
         share_prompt = self._maybe_share_inner_life(ctx.session_key, recalled)
+        if trace is not None:
+            trace.end(
+                "ok" if share_prompt else "skipped",
+                "shared" if share_prompt else "no share",
+            )
 
         # 构建 system 消息（人格 + 关系 + 长期记忆 + 情绪锚点 + 防御 + 风格 + few-shot）
         system_parts = [
@@ -460,3 +550,49 @@ class AgentLoop:
         """生成当天的私密日记 + 梦（由调度器每日调用，不投递给用户）."""
         await self.diary.write_today(session_key)
         await self.dream.dream(session_key)
+
+    # ------------------------------------------------------------------
+    # 内部工具方法
+    # ------------------------------------------------------------------
+
+    def _flush_trace(self, trace: TraceBuilder) -> None:
+        """将 trace 写入数据库（非 async，避免阻塞消息处理）."""
+        try:
+            self.memory.add_agent_trace(
+                trace_id=trace.trace_id,
+                session_key=trace.session_key,
+                message_id=trace.message_id,
+                started_at=_format_iso(trace.started_at),
+                completed_at=_format_iso(_time_module.time()),
+                steps=[
+                    {
+                        "step_number": s.step_number,
+                        "step_name": s.step_name,
+                        "status": s.status,
+                        "detail": s.detail,
+                        "elapsed_ms": s.elapsed_ms,
+                    }
+                    for s in trace.steps
+                ],
+                total_elapsed_ms=trace.total_elapsed_ms(),
+            )
+        except Exception:
+            logger.exception("Failed to persist agent trace")
+
+
+def _format_iso(epoch: float) -> str:
+    """epoch 秒 → ISO 8601 字符串（UTC）."""
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+
+
+def _fast_path_response(
+    intent_result: IntentResult, router: IntentRouter,
+) -> str | None:
+    """非 chat 意图 → 返回预写模板；chat → 返回 None（走正常 LLM 流程）."""
+    if intent_result.intent == "risk":
+        return router.RISK_RESPONSE
+    if intent_result.intent == "functional":
+        return router.FUNCTIONAL_RESPONSE
+    if intent_result.intent == "identity":
+        return router.IDENTITY_RESPONSE
+    return None
