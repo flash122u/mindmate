@@ -10,6 +10,11 @@ build/
 # IDE
 .vscode/
 .idea/
+.ai/
+.codebuddy/
+
+# 个人文档（不提交到公开仓库）
+项目2.md
 
 # 运行时
 logs/
