@@ -158,6 +158,15 @@ def create_app(bus: Any) -> FastAPI:
     async def dashboard_context_stats(session_key: str = "default"):
         return store.get_context_stats(session_key)
 
+    # ------------------------------------------------------------------
+    # Skill 状态
+    # ------------------------------------------------------------------
+    from mindmate.skills.skill import SkillLibrary
+
+    @app.get("/api/dashboard/skills")
+    async def dashboard_skills():
+        return {"skills": SkillLibrary.registry().status_items()}
+
     # WebSocket: 双向实时通信。?uid=xxx 标识用户，缺省 default
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):

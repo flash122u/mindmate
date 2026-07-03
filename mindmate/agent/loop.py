@@ -29,6 +29,7 @@ from mindmate.personality.emotion_anchor import EmotionAnchorManager
 from mindmate.personality.forget import ForgetAgent
 from mindmate.personality.memory_consolidator import MemoryConsolidator
 from mindmate.personality.relationship import RelationshipManager
+from mindmate.skills.skill import SkillLibrary
 from mindmate.tools.crisis_detect import CrisisDetector
 from mindmate.utils.splitter import split_message, think_delay, typing_delay
 
@@ -95,6 +96,7 @@ class AgentLoop:
         memory_maintenance: bool = True,
         tools: Any = None,
         router: IntentRouter | None = None,
+        skill_library: SkillLibrary | None = None,
     ) -> None:
         self.bus = bus
         self.provider = DeepSeekProvider()
@@ -103,6 +105,8 @@ class AgentLoop:
         self.tools = tools
         # 意图路由器（可注入，测试友好）
         self.router = router or IntentRouter()
+        # 陪伴场景 Skill 库（可注入，测试友好）
+        self.skill_library = skill_library or SkillLibrary()
         self.defense = DefenseMechanism()
         self.relationship = RelationshipManager(self.memory)
         # 情绪锚点 + 记忆整合 + 遗忘
@@ -488,6 +492,24 @@ class AgentLoop:
             system_parts.extend(["", anchor_prompt])
         if share_prompt:
             system_parts.extend(["", share_prompt])
+
+        # 陪伴场景 Skill：根据用户消息选择匹配的共情指南，注入到系统提示
+        if trace is not None:
+            trace.begin("SKILL_SELECT")
+        skill_context = self.skill_library.build_skill_context(
+            msg.content, intent="chat"
+        )
+        if trace is not None:
+            selected = (
+                self.skill_library.select_skill_names(msg.content, intent="chat")
+            )
+            trace.end(
+                "ok" if skill_context else "skipped",
+                f"selected={','.join(selected)}" if selected else "selected=none",
+            )
+        if skill_context:
+            system_parts.extend(["", skill_context])
+
         system_parts.extend(["", self._STYLE_RULES, "", self._FEWSHOT])
         if care_prompt:
             system_parts.extend(["", care_prompt])

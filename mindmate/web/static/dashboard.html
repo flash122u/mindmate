@@ -95,6 +95,11 @@
   </div>
 
   <div class="card">
+    <h2><span class="bar"></span>陪伴场景 Skill</h2>
+    <div id="skills-table"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="card">
     <h2><span class="bar"></span>情绪趋势</h2>
     <svg id="trend" viewBox="0 0 900 160" preserveAspectRatio="none"></svg>
     <div id="trend-empty" class="empty" style="display:none">暂无情绪数据</div>
@@ -262,10 +267,31 @@ async function loadContextStats() {
   } catch(e) { console.error(e); }
 }
 
+async function loadSkills() {
+  try {
+    const d = await (await fetch('/api/dashboard/skills')).json();
+    const skills = d.skills || [];
+    if (!skills.length) {
+      document.getElementById('skills-table').innerHTML = '<div class="empty">未加载到 Skill</div>';
+      return;
+    }
+    const rows = skills.map(s => {
+      const badgeClass = s.status === 'READY' ? 'low' : (s.status === 'WARN' ? 'medium' : 'high');
+      return '<tr>' +
+        '<td>' + s.name + '</td>' +
+        '<td><span class="badge ' + badgeClass + '">' + s.status + '</span></td>' +
+        '<td>' + s.description + '</td>' +
+        '<td style="color:#999;font-size:12px">' + (s.keywords || []).join(' / ') + '</td>' +
+        '</tr>';
+      }).join('');
+    document.getElementById('skills-table').innerHTML = '<table><thead><tr><th>名称</th><th>状态</th><th>描述</th><th>触发词</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  } catch(e) { console.error(e); }
+}
+
 async function loadAll() {
   try {
     await loadUsers();
-    await Promise.all([loadOverview(), loadTrends(), loadAlerts(), loadHistory(), loadTraces(), loadContextStats()]);
+    await Promise.all([loadOverview(), loadTrends(), loadAlerts(), loadHistory(), loadTraces(), loadContextStats(), loadSkills()]);
   } catch (e) { console.error(e); }
 }
 loadAll();
