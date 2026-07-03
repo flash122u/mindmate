@@ -137,7 +137,46 @@ function getUid() {
 }
 const UID = getUid();
 
-function addMsg(text, role) {
+let lastMsgTime = null;
+
+function formatTime(isoStr) {
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const diffMs = now - d;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return '刚刚';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dayDiff = Math.round((today - msgDay) / 86400000);
+  if (dayDiff === 0) return hh + ':' + mm;
+  if (dayDiff === 1) return '昨天 ' + hh + ':' + mm;
+  if (d.getFullYear() === now.getFullYear()) {
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hh + ':' + mm;
+  }
+  return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + hh + ':' + mm;
+}
+
+function addTimestamp(isoStr) {
+  const el = document.createElement('div');
+  el.className = 'timestamp';
+  el.textContent = formatTime(isoStr);
+  chatEl.appendChild(el);
+}
+
+function addMsg(text, role, createdAt) {
+  // 时间分隔线：gap ≥ 5 分钟时插入
+  if (createdAt) {
+    const t = new Date(createdAt).getTime();
+    if (!isNaN(t)) {
+      if (!lastMsgTime || t - lastMsgTime >= 5 * 60 * 1000) {
+        addTimestamp(createdAt);
+      }
+      lastMsgTime = t;
+    }
+  }
   const row = document.createElement('div');
   row.className = `row ${role}`;
   const avatar = document.createElement('div');
@@ -186,7 +225,8 @@ async function loadHistory() {
   try {
     const d = await (await fetch(`/api/dashboard/history?session_key=${encodeURIComponent(UID)}&limit=60`)).json();
     chatEl.innerHTML = '';
-    (d.history || []).forEach(h => addMsg(h.content, h.role === 'assistant' ? 'assistant' : 'user'));
+    lastMsgTime = null;
+    (d.history || []).forEach(h => addMsg(h.content, h.role === 'assistant' ? 'assistant' : 'user', h.created_at));
     if (!d.history || !d.history.length) addSys('和小暖聊聊吧');
   } catch (e) { /* ignore */ }
 }
@@ -203,7 +243,7 @@ function connect() {
       showTyping();
     } else if (data.type === 'message') {
       hideTyping();
-      if (data.content) addMsg(data.content, 'assistant');
+      if (data.content) addMsg(data.content, 'assistant', new Date().toISOString());
       btnEl.disabled = false;
     }
   };
@@ -213,7 +253,7 @@ function connect() {
 function send() {
   const text = inputEl.value.trim();
   if (!text) return;
-  addMsg(text, 'user');
+  addMsg(text, 'user', new Date().toISOString());
   inputEl.value = '';
   autoGrow();
   btnEl.disabled = true;

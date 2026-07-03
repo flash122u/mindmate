@@ -70,6 +70,18 @@ def test_router_chat_fallback():
     assert r.confidence == 0.5
 
 
+def test_router_identity_not_greedy():
+    """回归测试：'你觉得我是谁' 不应被误判为 identity（修复 r'你.*是谁' 过于宽泛）."""
+    router = IntentRouter()
+    r = router.route("你觉得我是谁")
+    assert r.intent == "chat", (
+        f"expected 'chat' but got '{r.intent}' — "
+        f"ensure identity patterns don't greedily match"
+    )
+    r2 = router.route("你猜那个人是谁")
+    assert r2.intent == "chat"
+
+
 def test_router_priority_risk_over_functional():
     """优先级：风险信号优先于功能询问."""
     router = IntentRouter()
