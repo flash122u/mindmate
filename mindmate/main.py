@@ -14,7 +14,9 @@ from mindmate.config import settings
 from mindmate.proactive.loop import ProactiveLoop
 from mindmate.proactive.passive import PassiveLoop
 from mindmate.tools import ToolRegistry, WeatherTool
+from mindmate.tools.activity_tool import RandomActivityTool
 from mindmate.tools.mcp_client import MCPManager
+from mindmate.tools.time_tool import TimeTool
 
 
 async def build_tools() -> tuple[ToolRegistry | None, MCPManager | None]:
@@ -23,6 +25,8 @@ async def build_tools() -> tuple[ToolRegistry | None, MCPManager | None]:
         return None, None
     registry = ToolRegistry()
     registry.register(WeatherTool())
+    registry.register(TimeTool())
+    registry.register(RandomActivityTool())
     mcp = MCPManager(settings.mcp_servers)
     try:
         await mcp.connect(registry)

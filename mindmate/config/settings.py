@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -42,7 +43,15 @@ class Settings:
         self.tools_enabled: bool = (
             os.getenv("TOOLS_ENABLED", "true").lower() == "true"
         )
-        self.mcp_servers: dict = self._parse_mcp_servers(os.getenv("MCP_SERVERS", ""))
+        _default_mcp = json.dumps({
+            "music": {
+                "command": "python",
+                "args": ["-m", "mindmate.tools.mcp_servers.music_server"],
+            }
+        }, ensure_ascii=False)
+        self.mcp_servers: dict = self._parse_mcp_servers(
+            os.getenv("MCP_SERVERS", _default_mcp)
+        )
         ensure_dirs()
 
     @staticmethod
